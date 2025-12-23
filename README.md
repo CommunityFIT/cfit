@@ -14,7 +14,11 @@ cfit encourages feedback and collaboration with the long-term goal of improving 
 cfit is currently in active development and not yet on CRAN. You can install the development version from [GitHub](https://github.com/CommunityFIT/cfit) with:
 ``` r
 # install.packages("devtools")
+#Install  from GitHub
 devtools::install_github("CommunityFIT/cfit")
+#Load cfit library
+library(cfit)
+
 ```
 
 ## Functions
@@ -54,6 +58,7 @@ prepay_results <- calculate_prepay_speed(
 )
 
 prepay_results
+
 ```
 ### Custom Column Names
 

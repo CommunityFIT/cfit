@@ -1,6 +1,6 @@
 Package: cfit
 Title: Computational Finance Tools for Community Financial Institutions
-Version: 0.0.0.9000
+Version: 0.1.0
 Authors@R: 
     person("Colin", "Paterson", , "colinlpaterson@gmail.com", role = c("aut", "cre"))
 Description: Provides transparent, reproducible computational tools for solving 
