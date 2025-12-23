@@ -33,6 +33,9 @@
 #'       Cohorts with beginning balance below this value are excluded from results (default: 0)}
 #'   }
 #'
+#' @param verbose Logical indicating whether to print informational messages
+#'   about interest calculation methods and data filtering (default: FALSE)
+#'
 #' @return Data frame with columns:
 #'   \describe{
 #'     \item{Grouping columns}{As specified in \code{group_vars}}
@@ -90,6 +93,14 @@
 #' by identifying loans where the origination date (month and year) matches the reporting
 #' period. These new originations are added to the beginning balance to properly calculate
 #' the principal available for repayment during the period.
+#'
+#' #' \strong{Data Quality Safeguards:}
+#' \itemize{
+#'   \item SMM is clamped between 0 and 1 before CPR calculation to prevent mathematical errors
+#'   \item Scheduled principal is floored at 0 to handle interest-only periods
+#'   \item EFFDATE must be included in group_vars (validated on entry)
+#'   \item Data is automatically sorted by EFFDATE to ensure correct lag operations
+#' }
 #'
 #' @section Notes:
 #' \itemize{
@@ -188,7 +199,8 @@ calculate_prepay_speed <- function(
       interest_basis = 365,
       allow_negative_prepay = FALSE,
       min_begin_balance = 0
-    )
+    ),
+    verbose = FALSE
 ) {
 
   # ========================================================================
@@ -296,6 +308,15 @@ calculate_prepay_speed <- function(
     stop("'group_vars' columns not found in data: ", paste(missing_group, collapse = ", "))
   }
 
+  # Validate EFFDATE is in group_vars (critical for lag operation)
+  if (!col_effdate %in% group_vars) {
+    stop(
+      "The effective date column ('", col_effdate, "') must be included in group_vars. ",
+      "Without it, the lag operation for calculating beginning balances is meaningless. ",
+      "Add '", col_effdate, "' to your group_vars parameter."
+    )
+  }
+
   # Validate logical parameters
   if (!is.logical(allow_negative_prepay)) {
     stop("'allow_negative_prepay' must be TRUE or FALSE")
@@ -363,6 +384,10 @@ calculate_prepay_speed <- function(
     stop("Unable to convert 'col_origdate' to Date format. Check date values.")
   }
 
+  # NEW: Ensure EFFDATE is properly ordered for lag operation
+  df <- df %>%
+    arrange(EFFDATE, !!!syms(setdiff(group_vars, col_effdate)))
+
   # ========================================================================
   # INTEREST CALCULATION
   # ========================================================================
@@ -387,14 +412,16 @@ calculate_prepay_speed <- function(
       summarise(n_loans = n(), .groups = "drop") %>%
       arrange(INTEREST_BASIS)
 
-    message("Using loan-level interest basis:")
-    for (i in seq_len(nrow(basis_summary))) {
-      basis_val <- basis_summary$INTEREST_BASIS[i]
-      n_loans <- basis_summary$n_loans[i]
-      if (basis_val %in% c(360, 365)) {
-        message("  - ", n_loans, " loans with ", basis_val, "-day basis (daily interest)")
-      } else {
-        message("  - ", n_loans, " loans with invalid/missing basis (simple monthly)")
+    if (verbose) {
+      message("Using loan-level interest basis:")
+      for (i in seq_len(nrow(basis_summary))) {
+        basis_val <- basis_summary$INTEREST_BASIS[i]
+        n_loans <- basis_summary$n_loans[i]
+        if (basis_val %in% c(360, 365)) {
+          message("  - ", n_loans, " loans with ", basis_val, "-day basis (daily interest)")
+        } else {
+          message("  - ", n_loans, " loans with invalid/missing basis (simple monthly)")
+        }
       }
     }
 
@@ -410,7 +437,9 @@ calculate_prepay_speed <- function(
           MONTHLY_RATE = CURRINTRATE * (DAYS_IN_MONTH / interest_basis)
         )
 
-      message("Using global daily interest calculation with ", interest_basis, "-day basis")
+      if (verbose) {
+        message("Using global daily interest calculation with ", interest_basis, "-day basis")
+      }
 
     } else {
 
@@ -418,7 +447,9 @@ calculate_prepay_speed <- function(
       df <- df %>%
         mutate(MONTHLY_RATE = CURRINTRATE / 12)
 
-      message("Using simple monthly interest calculation (RATE / 12)")
+      if (verbose) {
+        message("Using simple monthly interest calculation (RATE / 12)")
+      }
     }
   }
 
@@ -429,10 +460,14 @@ calculate_prepay_speed <- function(
   df <- df %>%
     mutate(
       # Scheduled principal = Contractual Payment - Interest
-      SCHEDPRIN = ifelse(
-        !is.na(PAYAMT) & !is.na(BAL) & !is.na(MONTHLY_RATE),
-        PAYAMT - (BAL * MONTHLY_RATE),
-        NA_real_
+      # Floor at 0 to handle interest-only periods or payment < interest scenarios
+      SCHEDPRIN = pmax(
+        0,
+        ifelse(
+          !is.na(PAYAMT) & !is.na(BAL) & !is.na(MONTHLY_RATE),
+          PAYAMT - (BAL * MONTHLY_RATE),
+          NA_real_
+        )
       )
     )
 
@@ -488,9 +523,12 @@ calculate_prepay_speed <- function(
       PREPAYMENT = ACTUAL_PRIN - SCHED_PRIN_TOTAL,
       # Single Monthly Mortality: prepayment as % of beginning balance
       SMM = PREPAYMENT / BEGIN_BAL,
-      # CPR: Annualize monthly rate using standard formula
-      CPR = 1 - (1 - SMM)^12
-    )
+      # Clamp SMM to [0, 1] before CPR calculation to prevent invalid results
+      SMM_CLAMPED = pmax(0, pmin(1, SMM)),
+      # CPR: Annualize monthly rate using standard formula with clamped SMM
+      CPR = 1 - (1 - SMM_CLAMPED)^12
+    ) %>%
+    select(-SMM_CLAMPED)  # Remove intermediate column
 
   # Apply negative prepayment handling
   if (!allow_negative_prepay) {
@@ -508,7 +546,7 @@ calculate_prepay_speed <- function(
       filter(BEGIN_BAL >= min_begin_balance)
     rows_after <- nrow(df_summary)
 
-    if (rows_before > rows_after) {
+    if (rows_before > rows_after && verbose) {
       message(
         "Filtered out ", rows_before - rows_after,
         " cohorts with beginning balance below $",

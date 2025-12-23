@@ -22,5 +22,6 @@ utils::globalVariables(c(
   "ACTUAL_PRIN",
   "PREPAYMENT",
   "SMM",
+  "SMM_CLAMPED",  # NEW: Add this
   "CPR"
 ))

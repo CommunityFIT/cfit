@@ -16,3 +16,6 @@ BugReports: https://github.com/CommunityFIT/cfit/issues
 Imports: 
     dplyr,
     lubridate
+Suggests: 
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3

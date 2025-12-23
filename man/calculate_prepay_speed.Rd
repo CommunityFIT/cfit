@@ -10,7 +10,8 @@ calculate_prepay_speed(
   prepay_config = list(col_effdate = "EFFDATE", col_origdate = "ORIGDATE", col_typecode =
     "TYPECODE", col_balance = "BAL", col_orig_balance = "ORIGBAL", col_payment =
     "PAYAMT", col_rate = "CURRINTRATE", col_interest_basis = NULL, interest_basis = 365,
-    allow_negative_prepay = FALSE, min_begin_balance = 0)
+    allow_negative_prepay = FALSE, min_begin_balance = 0),
+  verbose = FALSE
 )
 }
 \arguments{
@@ -41,6 +42,9 @@ SMM/CPR values. If FALSE, negative values are floored at 0 (default: FALSE)}
 \item{\code{min_begin_balance}}{Numeric threshold for minimum beginning balance.
 Cohorts with beginning balance below this value are excluded from results (default: 0)}
 }}
+
+\item{verbose}{Logical indicating whether to print informational messages
+about interest calculation methods and data filtering (default: FALSE)}
 }
 \value{
 Data frame with columns:
@@ -105,6 +109,14 @@ FUNDED_BAL represents loans originated during the reporting period. This is calc
 by identifying loans where the origination date (month and year) matches the reporting
 period. These new originations are added to the beginning balance to properly calculate
 the principal available for repayment during the period.
+
+#' \strong{Data Quality Safeguards:}
+\itemize{
+\item SMM is clamped between 0 and 1 before CPR calculation to prevent mathematical errors
+\item Scheduled principal is floored at 0 to handle interest-only periods
+\item EFFDATE must be included in group_vars (validated on entry)
+\item Data is automatically sorted by EFFDATE to ensure correct lag operations
+}
 }
 \section{Notes}{
 
