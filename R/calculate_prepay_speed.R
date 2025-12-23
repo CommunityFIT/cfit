@@ -329,6 +329,25 @@ calculate_prepay_speed <- function(
   df <- df %>%
     rename(!!!rename_list)
 
+  # NEW CODE: Save original group_vars and translate to internal names
+  # Create mapping: user's column name → internal standard name
+  column_mapping <- setNames(
+    c("EFFDATE", "ORIGDATE", "TYPECODE", "BAL", "ORIGBAL", "PAYAMT", "CURRINTRATE"),
+    c(col_effdate, col_origdate, col_typecode, col_balance, col_orig_balance, col_payment, col_rate)
+  )
+
+  # Save original group_vars for output renaming later
+  group_vars_original <- group_vars
+
+  # Translate group_vars to internal names for processing
+  group_vars <- sapply(group_vars, function(gv) {
+    if (gv %in% names(column_mapping)) {
+      return(unname(column_mapping[gv]))
+    } else {
+      return(gv)  # Keep as-is (wasn't a renamed column)
+    }
+  }, USE.NAMES = FALSE)
+
   # Convert date columns and validate
   df <- df %>%
     mutate(
@@ -514,6 +533,13 @@ calculate_prepay_speed <- function(
       SMM,
       CPR
     )
+
+  # Rename group columns back to user's original names
+  if (length(group_vars) == length(group_vars_original)) {
+    rename_back <- setNames(group_vars, group_vars_original)
+    df_summary <- df_summary %>%
+      rename(!!!rename_back)
+  }
 
   return(df_summary)
 }

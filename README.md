@@ -26,7 +26,59 @@ devtools::install_github("CommunityFIT/cfit")
 
 ## Example
 
-Coming soon - examples will be added as functions are documented.
+Here's how to calculate prepayment speeds for a sample auto loan portfolio:
+```r
+library(cfit)
+
+# Sample loan portfolio data (two months of snapshots)
+loan_data <- data.frame(
+  EFFDATE = as.Date(c(
+    "2024-01-31", "2024-01-31", "2024-01-31",
+    "2024-02-29", "2024-02-29", "2024-02-29"
+  )),
+  ORIGDATE = as.Date(c(
+    "2023-06-15", "2023-08-20", "2023-09-10",
+    "2023-06-15", "2023-08-20", "2023-09-10"
+  )),
+  TYPECODE = c("AUTO", "AUTO", "AUTO", "AUTO", "AUTO", "AUTO"),
+  BAL = c(18500, 22000, 15800, 17800, 21200, 15100),
+  ORIGBAL = c(25000, 30000, 20000, 25000, 30000, 20000),
+  PAYAMT = c(450, 520, 380, 450, 520, 380),
+  CURRINTRATE = c(0.0729, 0.0649, 0.0799, 0.0729, 0.0649, 0.0799)
+)
+
+# Calculate monthly prepayment speeds
+prepay_results <- calculate_prepay_speed(
+  df = loan_data,
+  group_vars = c("EFFDATE", "TYPECODE")
+)
+
+prepay_results
+```
+### Custom Column Names
+
+If your data uses different column names, configure the mapping:
+```r
+# Example: Your institution uses different column names
+custom_config <- list(
+  col_effdate = "ReportDate",
+  col_origdate = "OpenDate",
+  col_typecode = "Product",
+  col_balance = "CurrentBalance",
+  col_orig_balance = "StartingBalance",
+  col_payment = "MonthlyPayment",
+  col_rate = "InterestRate",
+  interest_basis = 360  # Or 365, depending on your calculation method
+)
+
+result <- calculate_prepay_speed(
+  df = your_data,
+  group_vars = c("ReportDate", "LoanType"),
+  prepay_config = custom_config
+)
+```
+
+For more details, see `?calculate_prepay_speed`.
 
 ## Roadmap
 
