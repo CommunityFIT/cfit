@@ -1,9 +1,12 @@
 Package: cfit
-Title: What the Package Does (One Line, Title Case)
+Title: Computational Finance Tools for Community Financial Institutions
 Version: 0.0.0.9000
 Authors@R: 
-    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
-Description: What the package does (one paragraph).
+    person("Colin", "Paterson", , "colinlpaterson@gmail.com", role = c("aut", "cre"))
+Description: Provides transparent, reproducible computational tools for solving 
+    common financial problems encountered by community banks and credit unions.
+    Includes functions for prepayment analysis, loan cash flow generation, 
+    and more!.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
