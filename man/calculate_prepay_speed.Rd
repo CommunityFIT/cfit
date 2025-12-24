@@ -9,8 +9,8 @@ calculate_prepay_speed(
   group_vars,
   prepay_config = list(col_effdate = "EFFDATE", col_origdate = "ORIGDATE", col_typecode =
     "TYPECODE", col_balance = "BAL", col_orig_balance = "ORIGBAL", col_payment =
-    "PAYAMT", col_rate = "CURRINTRATE", col_interest_basis = NULL, interest_basis = 365,
-    allow_negative_prepay = FALSE, min_begin_balance = 0),
+    "PAYAMT", col_rate = "CURRINTRATE", col_interest_basis = NULL, col_loanid = NULL,
+    interest_basis = 365, allow_negative_prepay = FALSE, min_begin_balance = 0),
   verbose = FALSE
 )
 }
@@ -34,6 +34,9 @@ These typically represent reporting period and loan product type.}
 \item{\code{col_rate}}{Name of current interest rate column (default: "CURRINTRATE")}
 \item{\code{col_interest_basis}}{Name of loan-level interest basis column (optional, default: NULL).
 If provided, uses loan-level interest calculation basis. If NULL, uses global \code{interest_basis} parameter.}
+\item{\code{col_loanid}}{Name of unique loan identifier column (optional, default: NULL).
+If provided, validates that each loan appears only once per reporting period.
+Recommended for data quality assurance (e.g., "LOANNUMBER", "LOAN_ID").}
 \item{\code{interest_basis}}{Number of days in year for interest calculation (global fallback).
 Use 360 or 365 for daily interest method, or NULL/NA for simple monthly division.
 Ignored if \code{col_interest_basis} is specified (default: 365)}
@@ -95,6 +98,8 @@ Otherwise: \eqn{INTEREST = BAL \times \frac{RATE}{12}}
 
 \strong{Data Requirements:}
 \itemize{
+\item \strong{One row per loan per reporting date} - Each loan should appear exactly once
+for each effective date. Use \code{col_loanid} parameter to validate this assumption.
 \item Loan-level data with monthly snapshots (one row per loan per reporting date)
 \item Data should include only active loans (open and non-performing)
 \item All required columns must be present (checked on function entry)
@@ -110,7 +115,7 @@ by identifying loans where the origination date (month and year) matches the rep
 period. These new originations are added to the beginning balance to properly calculate
 the principal available for repayment during the period.
 
-#' \strong{Data Quality Safeguards:}
+\strong{Data Quality Safeguards:}
 \itemize{
 \item SMM is clamped between 0 and 1 before CPR calculation to prevent mathematical errors
 \item Scheduled principal is floored at 0 to handle interest-only periods

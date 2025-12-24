@@ -270,33 +270,50 @@ test_that("allow_negative_prepay parameter works correctly", {
 # ==============================================================================
 
 test_that("minimum balance filter removes small cohorts", {
-  # Create data with mixed balance sizes
+  # Create minimal data: Just 2 months, 2 types
+  # Key: END_BAL in Jan becomes BEGIN_BAL in Feb (via lag)
   mixed_balance_data <- data.frame(
-    EFFDATE = as.Date(c("2024-01-31", "2024-02-29", "2024-01-31", "2024-02-29")),
-    ORIGDATE = as.Date(c("2023-01-15", "2023-01-15", "2023-06-10", "2023-06-10")),
+    EFFDATE = as.Date(c(
+      "2024-01-31", "2024-02-29",  # AUTO: Large balances
+      "2024-01-31", "2024-02-29"   # SMALL: Tiny balances
+    )),
+    ORIGDATE = as.Date(c(
+      "2023-01-15", "2023-01-15",
+      "2023-06-10", "2023-06-10"
+    )),
     TYPECODE = c("AUTO", "AUTO", "SMALL", "SMALL"),
-    BAL = c(10000, 9500, 100, 50),
+    BAL = c(10000, 9500, 100, 50),  # Jan then Feb for each type
     ORIGBAL = c(15000, 15000, 200, 200),
     PAYAMT = c(500, 500, 10, 10),
     CURRINTRATE = c(0.05, 0.05, 0.05, 0.05)
   )
 
-  # Without filter
+  # Without filter - should get both types for Feb
   result_no_filter <- calculate_prepay_speed(
     df = mixed_balance_data,
     group_vars = c("EFFDATE", "TYPECODE"),
     prepay_config = list(min_begin_balance = 0)
   )
 
-  # With $5000 filter
+  # With filter - should only get AUTO (BEGIN_BAL = 10000 > 5000)
+  # SMALL should be filtered out (BEGIN_BAL = 100 < 5000)
   result_with_filter <- calculate_prepay_speed(
     df = mixed_balance_data,
     group_vars = c("EFFDATE", "TYPECODE"),
     prepay_config = list(min_begin_balance = 5000)
   )
 
-  # Filtered result should have fewer rows
+  # Verify: Without filter should have 2 rows (Feb AUTO + Feb SMALL)
+  expect_equal(nrow(result_no_filter), 2)
+
+  # Verify: With filter should have 1 row (only Feb AUTO)
+  expect_equal(nrow(result_with_filter), 1)
+
+  # Main assertion: Filtered result has fewer rows
   expect_true(nrow(result_with_filter) < nrow(result_no_filter))
+
+  # Verify it kept the right cohort
+  expect_equal(result_with_filter$TYPECODE, "AUTO")
 })
 
 # ==============================================================================
@@ -367,3 +384,29 @@ test_that("function errors on empty dataframe", {
     "empty"
   )
 })
+
+
+mixed_balance_data <- data.frame(
+  EFFDATE = as.Date(c(
+    "2024-01-31", "2024-02-29",
+    "2024-01-31", "2024-02-29"
+  )),
+  ORIGDATE = as.Date(c(
+    "2023-01-15", "2023-01-15",
+    "2023-06-10", "2023-06-10"
+  )),
+  TYPECODE = c("AUTO", "AUTO", "SMALL", "SMALL"),
+  BAL = c(10000, 9500, 100, 50),
+  ORIGBAL = c(15000, 15000, 200, 200),
+  PAYAMT = c(500, 500, 10, 10),
+  CURRINTRATE = c(0.05, 0.05, 0.05, 0.05)
+)
+
+result_with_filter <- calculate_prepay_speed(
+  df = mixed_balance_data,
+  group_vars = c("EFFDATE", "TYPECODE"),
+  prepay_config = list(min_begin_balance = 5000),
+  verbose = TRUE  # Should print filter message
+)
+
+print(result_with_filter)

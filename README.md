@@ -3,11 +3,11 @@
 <!-- badges: start -->
 <!-- badges: end -->
 
-The goal of cfit is to provide transparent, reproducible computations for solving common financial problems that community financial institutions (community banks and credit unions) regularly encounter. 
+The goal of cfit is to provide transparent, reproducible computations for solving common financial reporting and analytic problems that community financial institutions (community banks and credit unions) regularly encounter. 
 
 The intended audience is financial and treasury analysts who often solve these problems in Excel on an ad hoc basis. cfit aims to standardize and automate solving these computational problems using the open source software R.
 
-cfit encourages feedback and collaboration with the long-term goal of improving trust and transparency in financial services and institutions.
+cfit encourages feedback and collaboration with the long-term goal of improving trust, transparency, and efficiency in financial reporting and analytics for community financial institutions.
 
 ## Installation
 
@@ -60,6 +60,28 @@ prepay_results <- calculate_prepay_speed(
 prepay_results
 
 ```
+### Data Validation
+
+Use `col_loanid` to validate that each loan appears only once per reporting period:
+```r
+# Add loan IDs to your data
+loan_data$LOANNUMBER <- c(101, 101, 103, 101, 102, 103)
+
+# Configure to check for duplicates
+validated_config <- list(
+  col_loanid = "LOANNUMBER"  # Validates unique loans per period
+)
+
+prepay_results <- calculate_prepay_speed(
+  df = loan_data,
+  group_vars = c("EFFDATE", "TYPECODE"),
+  prepay_config = validated_config
+)
+
+# If duplicates exist, the function will error with details:
+# Found 1 duplicate loan(s) within the same reporting period
+```
+
 ### Custom Column Names
 
 If your data uses different column names, configure the mapping:
@@ -73,7 +95,8 @@ custom_config <- list(
   col_orig_balance = "StartingBalance",
   col_payment = "MonthlyPayment",
   col_rate = "InterestRate",
-  interest_basis = 360  # Or 365, depending on your calculation method
+  col_interest_basis = NULL,
+  interest_basis = 360  # Or 365, global setting, depending on your calculation method
 )
 
 result <- calculate_prepay_speed(

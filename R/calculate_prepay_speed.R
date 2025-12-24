@@ -24,6 +24,9 @@
 #'     \item{\code{col_rate}}{Name of current interest rate column (default: "CURRINTRATE")}
 #'     \item{\code{col_interest_basis}}{Name of loan-level interest basis column (optional, default: NULL).
 #'       If provided, uses loan-level interest calculation basis. If NULL, uses global \code{interest_basis} parameter.}
+#'     \item{\code{col_loanid}}{Name of unique loan identifier column (optional, default: NULL).
+#'       If provided, validates that each loan appears only once per reporting period.
+#'       Recommended for data quality assurance (e.g., "LOANNUMBER", "LOAN_ID").}
 #'     \item{\code{interest_basis}}{Number of days in year for interest calculation (global fallback).
 #'       Use 360 or 365 for daily interest method, or NULL/NA for simple monthly division.
 #'       Ignored if \code{col_interest_basis} is specified (default: 365)}
@@ -79,6 +82,8 @@
 #'
 #' \strong{Data Requirements:}
 #' \itemize{
+#'   \item **One row per loan per reporting date** - Each loan should appear exactly once
+#'     for each effective date. Use \code{col_loanid} parameter to validate this assumption.
 #'   \item Loan-level data with monthly snapshots (one row per loan per reporting date)
 #'   \item Data should include only active loans (open and non-performing)
 #'   \item All required columns must be present (checked on function entry)
@@ -94,7 +99,7 @@
 #' period. These new originations are added to the beginning balance to properly calculate
 #' the principal available for repayment during the period.
 #'
-#' #' \strong{Data Quality Safeguards:}
+#' \strong{Data Quality Safeguards:}
 #' \itemize{
 #'   \item SMM is clamped between 0 and 1 before CPR calculation to prevent mathematical errors
 #'   \item Scheduled principal is floored at 0 to handle interest-only periods
@@ -196,6 +201,7 @@ calculate_prepay_speed <- function(
       col_payment = "PAYAMT",
       col_rate = "CURRINTRATE",
       col_interest_basis = NULL,
+      col_loanid = NULL,          # Optional loan ID for duplicate account checking
       interest_basis = 365,
       allow_negative_prepay = FALSE,
       min_begin_balance = 0
@@ -248,6 +254,7 @@ calculate_prepay_speed <- function(
   col_payment <- prepay_config$col_payment
   col_rate <- prepay_config$col_rate
   col_interest_basis <- prepay_config$col_interest_basis
+  col_loanid <- prepay_config$col_loanid
   interest_basis <- prepay_config$interest_basis
   allow_negative_prepay <- prepay_config$allow_negative_prepay
   min_begin_balance <- prepay_config$min_begin_balance
@@ -277,6 +284,16 @@ calculate_prepay_speed <- function(
       )
     }
     use_loan_level_basis <- TRUE
+  }
+
+  # Validate optional col_loanid if provided
+  if (!is.null(col_loanid)) {
+    if (!col_loanid %in% names(df)) {
+      stop(
+        "col_loanid specified as '", col_loanid,
+        "' but not found in data. Either remove col_loanid from config or add the column to df."
+      )
+    }
   }
 
   # Validate global interest_basis (only relevant if not using loan-level)
@@ -350,8 +367,8 @@ calculate_prepay_speed <- function(
   df <- df %>%
     rename(!!!rename_list)
 
-  # NEW CODE: Save original group_vars and translate to internal names
-  # Create mapping: user's column name → internal standard name
+  # Save original group_vars and translate to internal names
+  # Create mapping: users column name -> internal standard name
   column_mapping <- setNames(
     c("EFFDATE", "ORIGDATE", "TYPECODE", "BAL", "ORIGBAL", "PAYAMT", "CURRINTRATE"),
     c(col_effdate, col_origdate, col_typecode, col_balance, col_orig_balance, col_payment, col_rate)
@@ -384,9 +401,51 @@ calculate_prepay_speed <- function(
     stop("Unable to convert 'col_origdate' to Date format. Check date values.")
   }
 
-  # NEW: Ensure EFFDATE is properly ordered for lag operation
-  df <- df %>%
-    arrange(EFFDATE, !!!syms(setdiff(group_vars, col_effdate)))
+  # Check for duplicate loans if col_loanid provided
+  if (!is.null(col_loanid)) {
+    # Need to use internal name for loan ID after rename
+    if (col_loanid %in% names(column_mapping)) {
+      loan_id_internal <- column_mapping[col_loanid]
+    } else {
+      loan_id_internal <- col_loanid
+    }
+
+    duplicates <- df %>%
+      group_by(EFFDATE, across(all_of(loan_id_internal))) %>%
+      filter(n() > 1) %>%
+      ungroup()
+
+    if (nrow(duplicates) > 0) {
+      n_dups <- duplicates %>%
+        distinct(EFFDATE, across(all_of(loan_id_internal))) %>%
+        nrow()
+
+      stop(
+        "Found ", n_dups, " duplicate loan(s) within the same reporting period. ",
+        "Each loan should appear only once per EFFDATE. ",
+        "Check for duplicate records in your data. ",
+        "First few duplicates:\n",
+        paste(utils::capture.output(print(head(duplicates %>%
+                                                 select(EFFDATE, all_of(loan_id_internal))))), collapse = "\n")
+      )
+    }
+
+    if (verbose) {
+      message("Validated: No duplicate loans within reporting periods")
+    }
+  }
+
+  # UPDATED: Ensure EFFDATE is properly ordered for lag operation
+  # Sort by EFFDATE first, then by other cohort identifiers
+  non_date_groups <- setdiff(group_vars, "EFFDATE")
+
+  if (length(non_date_groups) > 0) {
+    df <- df %>%
+      arrange(EFFDATE, !!!syms(non_date_groups))
+  } else {
+    df <- df %>%
+      arrange(EFFDATE)
+  }
 
   # ========================================================================
   # INTEREST CALCULATION
@@ -522,21 +581,36 @@ calculate_prepay_speed <- function(
       # Prepayment: Principal paid beyond scheduled amount
       PREPAYMENT = ACTUAL_PRIN - SCHED_PRIN_TOTAL,
       # Single Monthly Mortality: prepayment as % of beginning balance
-      SMM = PREPAYMENT / BEGIN_BAL,
-      # Clamp SMM to [0, 1] before CPR calculation to prevent invalid results
-      SMM_CLAMPED = pmax(0, pmin(1, SMM)),
-      # CPR: Annualize monthly rate using standard formula with clamped SMM
-      CPR = 1 - (1 - SMM_CLAMPED)^12
-    ) %>%
-    select(-SMM_CLAMPED)  # Remove intermediate column
+      SMM = PREPAYMENT / BEGIN_BAL
+    )
 
-  # Apply negative prepayment handling
+  # Apply SMM clamping and CPR calculation based on allow_negative_prepay
   if (!allow_negative_prepay) {
+    # Default behavior: Floor negative prepayments at 0
     df_summary <- df_summary %>%
       mutate(
+        # Clamp SMM to [0, 1] to prevent mathematical errors
+        SMM_CLAMPED = pmax(0, pmin(1, SMM)),
+        # Calculate CPR from clamped SMM
+        CPR = 1 - (1 - SMM_CLAMPED)^12,
+        # Floor SMM at 0 for output
         SMM = pmax(0, SMM),
+        # Floor CPR at 0 for output
         CPR = pmax(0, CPR)
-      )
+      ) %>%
+      select(-SMM_CLAMPED)
+
+  } else {
+    # Allow negative prepayments: Use raw SMM for CPR but still prevent extreme values
+    df_summary <- df_summary %>%
+      mutate(
+        # Clamp SMM to [-1, 1] to prevent NaN/Inf but allow negative
+        SMM_CLAMPED = pmax(-1, pmin(1, SMM)),
+        # Calculate CPR from clamped SMM (can be negative)
+        CPR = 1 - (1 - SMM_CLAMPED)^12
+      ) %>%
+      select(-SMM_CLAMPED)
+    # Keep raw SMM and CPR values (can be negative)
   }
 
   # Apply minimum balance filter
