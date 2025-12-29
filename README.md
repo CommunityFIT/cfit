@@ -69,7 +69,7 @@ loan_data$LOANNUMBER <- c(101, 101, 103, 101, 102, 103)
 
 # Configure to check for duplicates
 validated_config <- list(
-  col_loanid = "LOANNUMBER"  # Validates unique loans per period
+  col_loanid = "LOANNUMBER"  # Validates unique loans per period  
 )
 
 prepay_results <- calculate_prepay_speed(

@@ -6,30 +6,23 @@ First stable release of cfit! 🎉
 
 * `calculate_prepay_speed()` - Calculate Single Monthly Mortality (SMM) and Conditional Prepayment Rate (CPR) for loan portfolios
 
-## Features
+**Accuracy**
+* Industry-standard SMM calculation using pool available to prepay
+* Improved scheduled principal accuracy when loan ID provided
+* Automatic interest rate format detection and conversion
 
-* **Flexible column mapping** - Works with any financial institution's data schema
-* **Multiple interest calculation methods** - Supports loan-level or global basis (360/365 days)
-* **Production-ready safeguards**:
-  - SMM clamped to [0,1] to prevent invalid CPR calculations
-  - Scheduled principal floored at 0 for interest-only periods
-  - EFFDATE validation ensures proper time-series ordering
-  - Automatic data sorting by effective date
-* **User-friendly output** - Returns results using your original column names
-* **Comprehensive validation** - Clear error messages for data issues
-* **Verbose mode** - Optional detailed logging for debugging
+**Validation**
+* Optional loan ID validation prevents duplicate records
+* Smart rate format handling (7.29% or 0.0729)
+* EFFDATE ordering validation
 
-## Configuration Options
+**Flexibility**
+* Custom column mapping for any FI's data structure
+* Multiple interest calculation methods (360/365-day basis)
+* Configurable prepayment handling and filtering
 
-* `allow_negative_prepay` - Control handling of negative prepayment scenarios
-* `min_begin_balance` - Filter out small cohorts
-* `interest_basis` - Choose 360-day, 365-day, or simple monthly interest (Ignored if col_interest_basis is specified)
-* `verbose` - Enable/disable informational messages
-
-## Testing
-
-* 36 automated tests covering all functionality and edge cases
-* Battle-tested with real-world scenarios
+**Testing**
+* 39 automated tests covering all functionality and edge cases
 
 ## Documentation
 
