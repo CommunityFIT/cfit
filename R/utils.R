@@ -12,8 +12,10 @@ utils::globalVariables(c(
   "PAYAMT",
   "CURRINTRATE",
   "INTEREST_BASIS",
+  "LOANID",                # Added for loan ID support
   "DAYS_IN_MONTH",
   "MONTHLY_RATE",
+  "BEGIN_BAL_LOAN",        # Added for loan-level beginning balance
   "SCHEDPRIN",
   "END_BAL",
   "BEGIN_BAL",
@@ -21,6 +23,7 @@ utils::globalVariables(c(
   "FUNDED_BAL",
   "ACTUAL_PRIN",
   "PREPAYMENT",
+  "AVAILABLE_TO_PREPAY",   # Added for adjusted SMM denominator
   "SMM",
   "SMM_CLAMPED",
   "CPR"

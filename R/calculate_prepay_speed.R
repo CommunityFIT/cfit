@@ -8,10 +8,12 @@
 #' @param df Data frame containing loan-level monthly snapshot data.
 #'   Each row represents a loan's status for a given reporting period.
 #'   Data should include only active loans (open and non-performing).
+#'   **Important:** Each loan should appear exactly once per reporting period.
 #'
 #' @param group_vars Character vector specifying columns to group by when calculating
 #'   aggregate prepayment rates (e.g., \code{c("EFFDATE", "TYPECODE")}).
 #'   These typically represent reporting period and loan product type.
+#'   **Note:** The effective date column must be included in group_vars.
 #'
 #' @param prepay_config List containing column name mappings and calculation parameters:
 #'   \describe{
@@ -21,12 +23,15 @@
 #'     \item{\code{col_balance}}{Name of current loan balance column (default: "BAL")}
 #'     \item{\code{col_orig_balance}}{Name of original/funded balance column (default: "ORIGBAL")}
 #'     \item{\code{col_payment}}{Name of contractual payment amount column (default: "PAYAMT")}
-#'     \item{\code{col_rate}}{Name of current interest rate column (default: "CURRINTRATE")}
+#'     \item{\code{col_rate}}{Name of current interest rate column (default: "CURRINTRATE").
+#'       Rates should be in decimal form (e.g., 0.0729 for 7.29\%). The function will
+#'       detect and convert percentage format with a warning.}
 #'     \item{\code{col_interest_basis}}{Name of loan-level interest basis column (optional, default: NULL).
 #'       If provided, uses loan-level interest calculation basis. If NULL, uses global \code{interest_basis} parameter.}
-#'     \item{\code{col_loanid}}{Name of unique loan identifier column (optional, default: NULL).
-#'       If provided, validates that each loan appears only once per reporting period.
-#'       Recommended for data quality assurance (e.g., "LOANNUMBER", "LOAN_ID").}
+#'     \item{\code{col_loanid}}{Name of unique loan identifier column (optional but recommended, default: NULL).
+#'       If provided: (1) validates that each loan appears only once per reporting period,
+#'       and (2) enables more accurate scheduled principal calculation using beginning-of-period balances.
+#'       Recommended for data quality assurance and calculation accuracy (e.g., "LOANNUMBER", "LOAN_ID").}
 #'     \item{\code{interest_basis}}{Number of days in year for interest calculation (global fallback).
 #'       Use 360 or 365 for daily interest method, or NULL/NA for simple monthly division.
 #'       Ignored if \code{col_interest_basis} is specified (default: 365)}
@@ -45,7 +50,7 @@
 #'     \item{\code{BEGIN_BAL}}{Beginning loan balance for the period}
 #'     \item{\code{END_BAL}}{Ending loan balance for the period}
 #'     \item{\code{SCHED_PRIN_TOTAL}}{Total scheduled principal for the period}
-#'     \item{\code{FUNDED_BAL}}{Loans funded during the period (new originations)}
+#'     \item{\code{FUNDED_BAL}}{Loans funded during the period (new originations, approximate)}
 #'     \item{\code{ACTUAL_PRIN}}{Actual principal paid (including prepayments)}
 #'     \item{\code{PREPAYMENT}}{Principal paid in excess of scheduled amount}
 #'     \item{\code{SMM}}{Single monthly mortality (0 to 1 scale)}
@@ -56,8 +61,9 @@
 #'
 #' \strong{Methodology:}
 #'
-#' SMM measures the monthly prepayment rate relative to beginning balance:
-#' \deqn{SMM = \frac{PREPAYMENT}{BEGIN\_BAL}}{SMM = PREPAYMENT / BEGIN_BAL}
+#' SMM measures the monthly prepayment rate relative to the pool available to prepay
+#' (beginning balance minus scheduled principal):
+#' \deqn{SMM = \frac{PREPAYMENT}{BEGIN\_BAL - SCHED\_PRIN\_TOTAL}}{SMM = PREPAYMENT / (BEGIN_BAL - SCHED_PRIN_TOTAL)}
 #'
 #' CPR annualizes SMM using the standard conversion formula:
 #' \deqn{CPR = 1 - (1 - SMM)^{12}}{CPR = 1 - (1 - SMM)^12}
@@ -65,8 +71,19 @@
 #' Principal flow calculation accounts for new originations:
 #' \deqn{ACTUAL\_PRIN = BEGIN\_BAL - END\_BAL + FUNDED\_BAL}
 #'
-#' Scheduled principal is calculated as payment minus interest:
-#' \deqn{SCHEDPRIN = PAYMENT - INTEREST}
+#' \strong{Scheduled Principal Calculation:}
+#'
+#' The accuracy of scheduled principal depends on whether a loan ID is provided:
+#'
+#' \itemize{
+#'   \item \strong{With col_loanid (recommended):} Scheduled principal is calculated using
+#'     beginning-of-period balance for each loan, providing accurate interest and principal separation:
+#'     \deqn{SCHEDPRIN = PAYMENT - (BEGIN\_BAL_{loan} \times MONTHLY\_RATE)}
+#'   \item \strong{Without col_loanid:} Scheduled principal uses end-of-period balance as an
+#'     approximation. This slightly overstates scheduled principal and understates prepayment
+#'     (typically <1-2\% error):
+#'     \deqn{SCHEDPRIN \approx PAYMENT - (END\_BAL_{loan} \times MONTHLY\_RATE)}
+#' }
 #'
 #' \strong{Interest Calculation Methods:}
 #' \itemize{
@@ -88,23 +105,29 @@
 #'   \item Data should include only active loans (open and non-performing)
 #'   \item All required columns must be present (checked on function entry)
 #'   \item Balances and payments should be positive numeric values
-#'   \item Interest rates should be decimals (e.g., 0.0729 for 7.29\%)
+#'   \item Interest rates should be in decimal form (e.g., 0.0729 for 7.29\%). Percentage
+#'     format (e.g., 7.29) will be detected and converted with a warning.
 #'   \item Date columns must be coercible to Date format
 #'   \item If using loan-level basis, values should be 360 or 365 (invalid values use simple monthly)
 #' }
 #'
 #' \strong{FUNDED_BAL Interpretation:}
-#' FUNDED_BAL represents loans originated during the reporting period. This is calculated
-#' by identifying loans where the origination date (month and year) matches the reporting
-#' period. These new originations are added to the beginning balance to properly calculate
-#' the principal available for repayment during the period.
+#'
+#' FUNDED_BAL is an approximation of new loan originations, calculated by identifying
+#' loans where the origination date (month and year) matches the reporting period. It uses
+#' the original funded amount (ORIGBAL) rather than actual cash flows, and matches by
+#' month/year only. For precise cash flow analysis, consider using actual funding data
+#' if available.
 #'
 #' \strong{Data Quality Safeguards:}
 #' \itemize{
-#'   \item SMM is clamped between 0 and 1 before CPR calculation to prevent mathematical errors
+#'   \item SMM denominator adjusted for scheduled principal (industry standard PSA method)
+#'   \item SMM is clamped to valid ranges before CPR calculation to prevent mathematical errors
 #'   \item Scheduled principal is floored at 0 to handle interest-only periods
 #'   \item EFFDATE must be included in group_vars (validated on entry)
 #'   \item Data is automatically sorted by EFFDATE to ensure correct lag operations
+#'   \item Optional duplicate loan detection when col_loanid is provided
+#'   \item Interest rate format validation (detects percentage vs decimal)
 #' }
 #'
 #' @section Notes:
@@ -114,74 +137,44 @@
 #'   \item NA values in balance or payment columns are removed with \code{na.rm = TRUE}
 #'   \item Cohorts with beginning balance below \code{min_begin_balance} are filtered out
 #'   \item The function uses \code{lubridate} for date handling and \code{dplyr} for data manipulation
-#'   \item Loan-level interest basis takes precedence over global \code{interest_basis} parameter
+#'   \item Providing \code{col_loanid} improves both data quality and calculation accuracy
 #' }
 #'
 #' @examples
 #' \dontrun{
-#' # Example 1: Loan-level interest basis (mixed 360/365 in same portfolio)
-#' prepay_config_loan_level <- list(
-#'   col_effdate = "EFFDATE",
-#'   col_origdate = "ORIGDATE",
-#'   col_typecode = "TYPECODE",
-#'   col_balance = "BAL",
-#'   col_orig_balance = "ORIGBAL",
-#'   col_payment = "PAYAMT",
-#'   col_rate = "CURRINTRATE",
-#'   col_interest_basis = "INT_BASIS",  # Loan-level column
-#'   allow_negative_prepay = FALSE,
-#'   min_begin_balance = 10000
-#' )
-#'
-#' result_loan_level <- calculate_prepay_speed(
+#' # Example 1: Basic usage with loan ID validation (recommended)
+#' result <- calculate_prepay_speed(
 #'   df = loan_pool_data,
 #'   group_vars = c("EFFDATE", "TYPECODE"),
-#'   prepay_config = prepay_config_loan_level
+#'   prepay_config = list(
+#'     col_loanid = "LOANNUMBER"  # Validates uniqueness and improves accuracy
+#'   )
 #' )
 #'
-#' # Example 2: Global interest basis (all loans use same method)
-#' prepay_config_global <- list(
-#'   col_effdate = "EFFDATE",
-#'   col_origdate = "ORIGDATE",
-#'   col_typecode = "TYPECODE",
-#'   col_balance = "BAL",
-#'   col_orig_balance = "ORIGBAL",
-#'   col_payment = "PAYAMT",
-#'   col_rate = "CURRINTRATE",
-#'   col_interest_basis = NULL,  # Use global parameter
-#'   interest_basis = 365,       # Applied to all loans
-#'   allow_negative_prepay = FALSE,
-#'   min_begin_balance = 10000
+#' # Example 2: Custom column names with validation
+#' custom_config <- list(
+#'   col_effdate = "ReportDate",
+#'   col_origdate = "OpenDate",
+#'   col_typecode = "Product",
+#'   col_balance = "CurrentBalance",
+#'   col_orig_balance = "StartingBalance",
+#'   col_payment = "MonthlyPayment",
+#'   col_rate = "InterestRate",
+#'   col_loanid = "LoanID",
+#'   interest_basis = 360
 #' )
 #'
-#' result_global <- calculate_prepay_speed(
+#' result <- calculate_prepay_speed(
 #'   df = loan_pool_data,
-#'   group_vars = c("EFFDATE", "TYPECODE"),
-#'   prepay_config = prepay_config_global
+#'   group_vars = c("ReportDate", "Product"),
+#'   prepay_config = custom_config
 #' )
 #'
-#' # Example 3: Simple monthly interest (no daily calculation)
-#' prepay_config_monthly <- list(
-#'   col_effdate = "EFFDATE",
-#'   col_origdate = "ORIGDATE",
-#'   col_typecode = "TYPECODE",
-#'   col_balance = "BAL",
-#'   col_orig_balance = "ORIGBAL",
-#'   col_payment = "PAYAMT",
-#'   col_rate = "CURRINTRATE",
-#'   interest_basis = NULL  # Will use RATE / 12 for all loans
-#' )
-#'
-#' result_monthly <- calculate_prepay_speed(
-#'   df = loan_pool_data,
-#'   group_vars = c("EFFDATE", "TYPECODE"),
-#'   prepay_config = prepay_config_monthly
-#' )
-#'
-#' # Example 4: Minimal configuration (uses all defaults)
-#' result_default <- calculate_prepay_speed(
+#' # Example 3: Without loan ID (less accurate scheduled principal)
+#' result_approx <- calculate_prepay_speed(
 #'   df = loan_pool_data,
 #'   group_vars = c("EFFDATE", "TYPECODE")
+#'   # No col_loanid: uses end balance approximation for scheduled principal
 #' )
 #' }
 #'
@@ -201,7 +194,7 @@ calculate_prepay_speed <- function(
       col_payment = "PAYAMT",
       col_rate = "CURRINTRATE",
       col_interest_basis = NULL,
-      col_loanid = NULL,          # Optional loan ID for duplicate account checking
+      col_loanid = NULL,
       interest_basis = 365,
       allow_negative_prepay = FALSE,
       min_begin_balance = 0
@@ -237,6 +230,7 @@ calculate_prepay_speed <- function(
     col_payment = "PAYAMT",
     col_rate = "CURRINTRATE",
     col_interest_basis = NULL,
+    col_loanid = NULL,
     interest_basis = 365,
     allow_negative_prepay = FALSE,
     min_begin_balance = 0
@@ -259,7 +253,7 @@ calculate_prepay_speed <- function(
   allow_negative_prepay <- prepay_config$allow_negative_prepay
   min_begin_balance <- prepay_config$min_begin_balance
 
-  # Validate required columns exist (excluding optional col_interest_basis)
+  # Validate required columns exist (excluding optional col_interest_basis and col_loanid)
   required_cols <- c(
     col_effdate, col_origdate, col_typecode, col_balance,
     col_orig_balance, col_payment, col_rate
@@ -287,6 +281,7 @@ calculate_prepay_speed <- function(
   }
 
   # Validate optional col_loanid if provided
+  use_loan_id <- FALSE
   if (!is.null(col_loanid)) {
     if (!col_loanid %in% names(df)) {
       stop(
@@ -294,6 +289,7 @@ calculate_prepay_speed <- function(
         "' but not found in data. Either remove col_loanid from config or add the column to df."
       )
     }
+    use_loan_id <- TRUE
   }
 
   # Validate global interest_basis (only relevant if not using loan-level)
@@ -364,20 +360,29 @@ calculate_prepay_speed <- function(
     rename_list$INTEREST_BASIS <- col_interest_basis
   }
 
+  # Add loan ID column to rename list if provided
+  if (use_loan_id) {
+    rename_list$LOANID <- col_loanid
+  }
+
   df <- df %>%
     rename(!!!rename_list)
-
-  # Save original group_vars and translate to internal names
-  # Create mapping: users column name -> internal standard name
-  column_mapping <- setNames(
-    c("EFFDATE", "ORIGDATE", "TYPECODE", "BAL", "ORIGBAL", "PAYAMT", "CURRINTRATE"),
-    c(col_effdate, col_origdate, col_typecode, col_balance, col_orig_balance, col_payment, col_rate)
-  )
 
   # Save original group_vars for output renaming later
   group_vars_original <- group_vars
 
   # Translate group_vars to internal names for processing
+  # Create mapping: user's column name -> internal standard name
+  column_mapping <- setNames(
+    c("EFFDATE", "ORIGDATE", "TYPECODE", "BAL", "ORIGBAL", "PAYAMT", "CURRINTRATE"),
+    c(col_effdate, col_origdate, col_typecode, col_balance, col_orig_balance, col_payment, col_rate)
+  )
+
+  # If loan ID provided, add to mapping
+  if (use_loan_id) {
+    column_mapping <- c(column_mapping, setNames("LOANID", col_loanid))
+  }
+
   group_vars <- sapply(group_vars, function(gv) {
     if (gv %in% names(column_mapping)) {
       return(unname(column_mapping[gv]))
@@ -402,22 +407,15 @@ calculate_prepay_speed <- function(
   }
 
   # Check for duplicate loans if col_loanid provided
-  if (!is.null(col_loanid)) {
-    # Need to use internal name for loan ID after rename
-    if (col_loanid %in% names(column_mapping)) {
-      loan_id_internal <- column_mapping[col_loanid]
-    } else {
-      loan_id_internal <- col_loanid
-    }
-
+  if (use_loan_id) {
     duplicates <- df %>%
-      group_by(EFFDATE, across(all_of(loan_id_internal))) %>%
+      group_by(EFFDATE, LOANID) %>%
       filter(n() > 1) %>%
       ungroup()
 
     if (nrow(duplicates) > 0) {
       n_dups <- duplicates %>%
-        distinct(EFFDATE, across(all_of(loan_id_internal))) %>%
+        distinct(EFFDATE, LOANID) %>%
         nrow()
 
       stop(
@@ -426,7 +424,7 @@ calculate_prepay_speed <- function(
         "Check for duplicate records in your data. ",
         "First few duplicates:\n",
         paste(utils::capture.output(print(head(duplicates %>%
-                                                 select(EFFDATE, all_of(loan_id_internal))))), collapse = "\n")
+                                                 select(EFFDATE, LOANID)))), collapse = "\n")
       )
     }
 
@@ -435,7 +433,31 @@ calculate_prepay_speed <- function(
     }
   }
 
-  # UPDATED: Ensure EFFDATE is properly ordered for lag operation
+  # Validate and convert interest rates if needed
+  if (any(df$CURRINTRATE > 1, na.rm = TRUE)) {
+    max_rate <- max(df$CURRINTRATE, na.rm = TRUE)
+
+    # Check if it looks like percentages (most rates 1-20, not 0.01-0.20)
+    if (max_rate > 1 && max_rate < 100) {
+      warning(
+        "Interest rates appear to be in percentage form (max rate: ",
+        round(max_rate, 2), "%). ",
+        "Rates should be in decimal form (e.g., 0.0729 for 7.29%). ",
+        "Converting by dividing by 100.",
+        call. = FALSE
+      )
+      df <- df %>%
+        mutate(CURRINTRATE = CURRINTRATE / 100)
+    } else if (max_rate >= 100) {
+      stop(
+        "Interest rates are unexpectedly high (max rate: ", round(max_rate, 2), "). ",
+        "Rates should be in decimal form (e.g., 0.0729 for 7.29%). ",
+        "Please verify your data."
+      )
+    }
+  }
+
+  # Ensure EFFDATE is properly ordered for lag operation
   # Sort by EFFDATE first, then by other cohort identifiers
   non_date_groups <- setdiff(group_vars, "EFFDATE")
 
@@ -445,6 +467,12 @@ calculate_prepay_speed <- function(
   } else {
     df <- df %>%
       arrange(EFFDATE)
+  }
+
+  # If loan ID provided, also sort by LOANID for loan-level lag
+  if (use_loan_id) {
+    df <- df %>%
+      arrange(LOANID, EFFDATE)
   }
 
   # ========================================================================
@@ -516,19 +544,52 @@ calculate_prepay_speed <- function(
   # SCHEDULED PRINCIPAL CALCULATION
   # ========================================================================
 
-  df <- df %>%
-    mutate(
-      # Scheduled principal = Contractual Payment - Interest
-      # Floor at 0 to handle interest-only periods or payment < interest scenarios
-      SCHEDPRIN = pmax(
-        0,
-        ifelse(
-          !is.na(PAYAMT) & !is.na(BAL) & !is.na(MONTHLY_RATE),
-          PAYAMT - (BAL * MONTHLY_RATE),
-          NA_real_
+  if (use_loan_id) {
+    # With loan ID: Use beginning balance for accurate scheduled principal
+    df <- df %>%
+      group_by(LOANID) %>%
+      mutate(
+        BEGIN_BAL_LOAN = lag(BAL)
+      ) %>%
+      ungroup() %>%
+      mutate(
+        # Scheduled principal = Payment - Interest on beginning balance
+        # Floor at 0 to handle interest-only periods or payment < interest scenarios
+        SCHEDPRIN = pmax(
+          0,
+          ifelse(
+            !is.na(PAYAMT) & !is.na(BEGIN_BAL_LOAN) & !is.na(MONTHLY_RATE),
+            PAYAMT - (BEGIN_BAL_LOAN * MONTHLY_RATE),
+            NA_real_
+          )
         )
       )
-    )
+
+    if (verbose) {
+      message("Using beginning-of-period balance for scheduled principal calculation (accurate method)")
+    }
+
+  } else {
+    # Without loan ID: Use ending balance as approximation
+    df <- df %>%
+      mutate(
+        # Scheduled principal = Payment - Interest on ending balance (approximation)
+        # Floor at 0 to handle interest-only periods or payment < interest scenarios
+        SCHEDPRIN = pmax(
+          0,
+          ifelse(
+            !is.na(PAYAMT) & !is.na(BAL) & !is.na(MONTHLY_RATE),
+            PAYAMT - (BAL * MONTHLY_RATE),
+            NA_real_
+          )
+        )
+      )
+
+    if (verbose) {
+      message("Using end-of-period balance for scheduled principal calculation (approximation)")
+      message("Note: Provide col_loanid for more accurate scheduled principal calculation")
+    }
+  }
 
   # ========================================================================
   # STEP 1: MONTHLY BALANCE SNAPSHOT
@@ -580,8 +641,10 @@ calculate_prepay_speed <- function(
       ACTUAL_PRIN = BEGIN_BAL - END_BAL + FUNDED_BAL,
       # Prepayment: Principal paid beyond scheduled amount
       PREPAYMENT = ACTUAL_PRIN - SCHED_PRIN_TOTAL,
-      # Single Monthly Mortality: prepayment as % of beginning balance
-      SMM = PREPAYMENT / BEGIN_BAL
+      # Pool available to prepay (beginning balance minus scheduled principal) Industry standard: scheduled principal was going to paid anyway
+      AVAILABLE_TO_PREPAY = pmax(BEGIN_BAL - SCHED_PRIN_TOTAL, 0),
+      # Single Monthly Mortality: prepayment as % of available pool
+      SMM = PREPAYMENT / AVAILABLE_TO_PREPAY
     )
 
   # Apply SMM clamping and CPR calculation based on allow_negative_prepay
@@ -598,7 +661,7 @@ calculate_prepay_speed <- function(
         # Floor CPR at 0 for output
         CPR = pmax(0, CPR)
       ) %>%
-      select(-SMM_CLAMPED)
+      select(-SMM_CLAMPED, -AVAILABLE_TO_PREPAY)
 
   } else {
     # Allow negative prepayments: Use raw SMM for CPR but still prevent extreme values
@@ -609,7 +672,7 @@ calculate_prepay_speed <- function(
         # Calculate CPR from clamped SMM (can be negative)
         CPR = 1 - (1 - SMM_CLAMPED)^12
       ) %>%
-      select(-SMM_CLAMPED)
+      select(-SMM_CLAMPED, -AVAILABLE_TO_PREPAY)
     # Keep raw SMM and CPR values (can be negative)
   }
 
