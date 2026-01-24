@@ -1,5 +1,4 @@
 # cfit
-
 <!-- badges: start -->
 <!-- badges: end -->
 
@@ -14,11 +13,10 @@ cfit encourages feedback and collaboration with the long-term goal of improving 
 cfit is currently in active development and not yet on CRAN. You can install the development version from [GitHub](https://github.com/CommunityFIT/cfit) with:
 ``` r
 # install.packages("devtools")
-#Install  from GitHub
-devtools::install_github("CommunityFIT/cfit")
-#Load cfit library
+# Install from GitHub
+devtools::install_github("CommunityFIT/cfit") #From GitHub
+# Load cfit library
 library(cfit)
-
 ```
 
 ## Functions
@@ -26,9 +24,12 @@ library(cfit)
 ### Prepayment Analysis
 - `calculate_prepay_speed()` - Calculate Single Monthly Mortality (SMM) and Conditional Prepayment Rate (CPR) for loan portfolios
 
-*More functions coming soon!*
+### Cash Flow Projection
+- `calculate_cash_flows()` - Generate monthly cash flow projections for loan portfolios with customizable prepayment speeds, credit costs, and fee structures
 
-## Example
+## Examples
+
+### Prepayment Speed Calculation
 
 Here's how to calculate prepayment speeds for a sample auto loan portfolio:
 ```r
@@ -58,9 +59,9 @@ prepay_results <- calculate_prepay_speed(
 )
 
 prepay_results
-
 ```
-### Data Validation
+
+#### Data Validation
 
 Use `col_loanid` to validate that each loan appears only once per reporting period:
 ```r
@@ -82,7 +83,7 @@ prepay_results <- calculate_prepay_speed(
 # Found 1 duplicate loan(s) within the same reporting period
 ```
 
-### Custom Column Names
+#### Custom Column Names
 
 If your data uses different column names, configure the mapping:
 ```r
@@ -96,7 +97,7 @@ custom_config <- list(
   col_payment = "MonthlyPayment",
   col_rate = "InterestRate",
   col_interest_basis = NULL,
-  interest_basis = 360  # Or 365, global setting, depending on your calculation method
+  interest_basis = 360  # Or 365, depending on your calculation method
 )
 
 result <- calculate_prepay_speed(
@@ -108,10 +109,83 @@ result <- calculate_prepay_speed(
 
 For more details, see `?calculate_prepay_speed`.
 
+### Cash Flow Projection and Portfolio Yield
+
+Generate monthly cash flow projections for a loan portfolio and calculate portfolio yield:
+```r
+install_github("felixfan/FinCal") # from GitHub
+library(cfit)
+library(FinCal)
+
+# Sample loan portfolio snapshot
+loan_portfolio <- data.frame(
+  LOAN_ID = c("L001", "L002", "L003"),
+  balance = c(25000, 50000, 15000),
+  current_interest_rate = c(0.0599, 0.0649, 0.0549),
+  months_to_maturity = c(60, 48, 36),
+  eff_date = as.Date("2025-01-01")
+)
+
+# Configure cash flow parameters
+config <- list(
+  cpr_vec = c("default" = 0.05),           # 5% CPR assumption
+  credit_cost_vec = c("default" = 0.01),   # 1% annual credit cost
+  servicing_fee = 0.0025,                  # 25 bps servicing fee
+  return_monthly_totals = TRUE             # Return aggregated monthly totals
+)
+
+# Generate cash flows
+results <- calculate_cash_flows(loan_portfolio, config)
+
+# View aggregated monthly totals
+head(results$monthly_totals)
+
+# Calculate portfolio yield
+pool_cfs <- data.frame(
+  date = results$monthly_totals$date,
+  amount = results$monthly_totals$investor_total  # Net cash flow to owner
+)
+
+portfolio_yield <- yield.actual(
+  cf = pool_cfs,
+  pv = sum(loan_portfolio$balance),
+  start_date = min(loan_portfolio$eff_date),
+  compounding = "monthly"
+)
+
+print(paste("Portfolio Yield:", round(portfolio_yield * 100, 2), "%"))
+```
+
+#### Tier-Based Assumptions
+
+Use different CPR and credit cost assumptions by loan tier:
+```r
+# Portfolio with tier classifications
+loan_portfolio_tiered <- data.frame(
+  LOAN_ID = c("L001", "L002", "L003", "L004"),
+  balance = c(25000, 50000, 15000, 30000),
+  current_interest_rate = c(0.0599, 0.0649, 0.0549, 0.0699),
+  months_to_maturity = c(60, 48, 36, 54),
+  eff_date = as.Date("2025-01-01"),
+  tier = c("A", "B", "A", "C")
+)
+
+# Configure tier-based assumptions
+config_tiered <- list(
+  col_tier = "tier",
+  cpr_vec = c("A" = 0.05, "B" = 0.08, "C" = 0.12),
+  credit_cost_vec = c("A" = 0.008, "B" = 0.015, "C" = 0.025),
+  servicing_fee = 0.0025
+)
+
+cash_flows_tiered <- calculate_cash_flows(loan_portfolio_tiered, config_tiered)
+```
+
+For more details, see `?calculate_cash_flows`.
+
 ## Roadmap
 
 Planned functions include:
-- Loan cash flow generation
 - Duration and WAL calculations
 - CECL analytics
 
@@ -129,4 +203,3 @@ cfit is part of the CommunityFIT initiative - open-source computational finance 
 ## License
 
 MIT © Colin Paterson
-
