@@ -47,7 +47,7 @@
 #'
 #' @importFrom dplyr bind_rows group_by summarise mutate if_else select
 #' @importFrom purrr pmap
-#' @importFrom lubridate %m+% months
+#' @importFrom lubridate %m+%
 #' @importFrom tibble tibble
 #' @importFrom stats setNames median
 #' @importFrom utils head
@@ -97,7 +97,7 @@
 #' )
 #' }
 #'
-#' @export
+#' @name calculate_cash_flows_globals
 utils::globalVariables(c(
   "starting_balance", "adjusted_balance", "scheduled_payment",
   "gross_interest", "servicing_fee", "scheduled_principal",
@@ -105,6 +105,8 @@ utils::globalVariables(c(
   "net_interest", "total_payment", "investor_principal",
   "investor_interest", "investor_total", "orig_fee", "net_interest_raw"
 ))
+
+#' @export
 calculate_cash_flows <- function(data, config = list()) {
 
   # Default configuration
