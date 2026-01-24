@@ -1,3 +1,12 @@
+# Global variables for NSE in dplyr
+utils::globalVariables(c(
+  "starting_balance", "adjusted_balance", "scheduled_payment",
+  "gross_interest", "servicing_fee", "scheduled_principal",
+  "prepayment", "total_principal", "credit_loss", "remaining_balance",
+  "net_interest", "total_payment", "investor_principal",
+  "investor_interest", "investor_total", "orig_fee", "net_interest_raw"
+))
+
 #' Calculate Loan Portfolio Cash Flows
 #'
 #' Generates monthly cash flow projections for a loan portfolio, incorporating
@@ -97,15 +106,6 @@
 #' )
 #' }
 #'
-#' @name calculate_cash_flows_globals
-utils::globalVariables(c(
-  "starting_balance", "adjusted_balance", "scheduled_payment",
-  "gross_interest", "servicing_fee", "scheduled_principal",
-  "prepayment", "total_principal", "credit_loss", "remaining_balance",
-  "net_interest", "total_payment", "investor_principal",
-  "investor_interest", "investor_total", "orig_fee", "net_interest_raw"
-))
-
 #' @export
 calculate_cash_flows <- function(data, config = list()) {
 
