@@ -2,31 +2,32 @@
 
 ## New Functions
 
-* `calculate_cash_flows()` - Generate monthly cash flow projections for loan portfolios with customizable prepayment speeds (CPR), credit costs, and fee structures
+* `calculate_cash_flows()` – Generate monthly cash flow projections for loan portfolios under customizable prepayment, credit loss, and fee assumptions.
 
-**Features**
-* Flexible column name mapping for any institution's data structure
+## Features
+
+* Flexible column mapping to support institution-specific data schemas
 * Tier-based differentiation for CPR and credit cost assumptions
-* Support for both direct credit cost specification and PD/LGD methodology
-* Optional aggregated monthly totals for portfolio yield (IRR) calculations
-* Investor share allocation for loan participation scenarios
-* Comprehensive input validation with helpful error messages
+* Support for both direct credit cost inputs and PD/LGD-based methodology
+* Optional aggregation of monthly cash flows for portfolio-level analysis
+* Investor share allocation for participation and ownership scenarios
+* Comprehensive input validation with informative warnings and errors
 
-**Performance**
-* Optimized date calculations for large portfolios
-* Progress indicators for portfolios with 1,000+ loans
-* Handles edge cases including zero-interest loans and de minimis balances
+## Performance
 
-**Output Options**
-* Loan-level cash flows with detailed monthly breakdowns
-* Aggregated monthly totals across entire portfolio
-* `investor_total` output column calculates the total cash flow due to the owner. This column and the `date` column can be used to calculate the portfolio yield using `FinCal::yield.actual()`
+* Improved date handling for large portfolios
+* Progress messages for portfolios with 1,000+ loans
+* Robust handling of edge cases including zero-interest loans and de minimis balances
+
+## Output Options
+
+* Detailed loan-level monthly cash flows
+* Aggregated monthly totals across the entire portfolio
+* `investor_total` column representing total cash flow due to the owner, suitable for external yield calculations
 
 ## Improvements
 
-* Enhanced package documentation
-* Added dependencies: `purrr`, `tibble`
-
+* Enhanced documentation and examples
 ---
 
 # cfit 0.1.0
