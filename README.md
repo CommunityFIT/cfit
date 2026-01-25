@@ -2,7 +2,7 @@
 <!-- badges: start -->
 <!-- badges: end -->
 
-The goal of cfit is to provide transparent, reproducible computations for solving common financial reporting and analytic problems that community financial institutions (community banks and credit unions) regularly encounter. 
+cfit provides transparent, reproducible computations for financial reporting and analytics problems faced by community financial institutions (community banks and credit unions).
 
 The intended audience is financial and treasury analysts who often solve these problems in Excel on an ad hoc basis. cfit aims to standardize and automate solving these computational problems using the open source software R.
 
@@ -22,10 +22,10 @@ library(cfit)
 ## Functions
 
 ### Prepayment Analysis
-- `calculate_prepay_speed()` - Calculate Single Monthly Mortality (SMM) and Conditional Prepayment Rate (CPR) for loan portfolios
+- `calculate_prepay_speed()` – Calculate SMM and CPR from portfolio snapshots, with validation and configurable column mappings
 
 ### Cash Flow Projection
-- `calculate_cash_flows()` - Generate monthly cash flow projections for loan portfolios with customizable prepayment speeds, credit costs, and fee structures
+- `calculate_cash_flows()` – Project monthly loan-level and portfolio-level cash flows under configurable prepayment, credit loss, and fee assumptions
 
 ## Examples
 
@@ -111,10 +111,21 @@ For more details, see `?calculate_prepay_speed`.
 
 ### Cash Flow Projection and Portfolio Yield
 
-Generate monthly cash flow projections for a loan portfolio and calculate portfolio yield:
+Generate monthly cash flow projections for a loan portfolio and calculate portfolio yield.
+
+**Inputs**
+- One row per loan (current snapshot)
+- Required fields: balance, rate, months to maturity, effective date
+- Optional tier classification for assumption mapping
+
+**Outputs**
+- Loan-level monthly projected cash flows
+- Optional aggregated monthly totals for portfolio analysis
+  
 ```r
-install_github("felixfan/FinCal") # from GitHub
-library(cfit)
+# Optional: used here only to demonstrate portfolio yield calculation
+# FinCal is not a dependency of cfit
+install_github("felixfan/FinCal")
 library(FinCal)
 
 # Sample loan portfolio snapshot
@@ -186,8 +197,8 @@ For more details, see `?calculate_cash_flows`.
 ## Roadmap
 
 Planned functions include:
-- Duration and WAL calculations
-- CECL analytics
+- Weighted Average Life (WAL) and duration calculations
+- CECL-oriented cash flow and loss analytics
 
 ## Contributing
 
