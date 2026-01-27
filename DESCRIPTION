@@ -1,10 +1,10 @@
 Package: cfit
 Title: Computational Finance Tools for Community Financial Institutions
-Version: 0.2.0
+Version: 0.2.1
 Authors@R: 
     person("Colin", "Paterson", , "colinlpaterson@gmail.com", role = c("aut", "cre"))
 Description: Provides transparent, reproducible computational tools for solving 
-    common financial problems encountered by community banks and credit unions.
+    financial problems encountered by community banks and credit unions.
     Includes functions for prepayment analysis, loan cash flow generation, 
     and more!.
 License: MIT + file LICENSE

@@ -16,9 +16,10 @@ Depending on return_monthly_totals setting:
 \itemize{
 \item If FALSE: A data frame with loan-level cash flows containing columns:
 LOAN_ID, month, date, starting_balance, adjusted_balance, accrual_balance,
-scheduled_payment, gross_interest, servicing_fee, scheduled_principal,
-prepayment, total_principal, credit_loss, remaining_balance, orig_fee,
-net_interest, total_payment, investor_principal, investor_interest, investor_total
+scheduled_payment, gross_interest, servicing_fee_amt, reporting_fee_amt,
+total_fees, scheduled_principal, prepayment, total_principal, credit_loss,
+remaining_balance, orig_fee, net_interest, total_payment, investor_principal,
+investor_interest, investor_total
 \item If TRUE: A list with two elements:
 \itemize{
 \item loan_cash_flows: Detailed loan-level cash flows (data frame)
@@ -42,16 +43,21 @@ Configuration list structure:
 \item col_monthly_payment: Column name for monthly payment (default: NULL, optional)
 \item col_orig_balance: Column name for original balance (default: NULL, optional)
 \item servicing_fee: Annual servicing fee rate as decimal (default: 0.0025)
-\item monthly_reporting_fee: Monthly reporting fee rate (default: 0.00)
+\item annual_reporting_fee: Annual reporting fee rate as decimal (default: 0.00)
 \item investor_share: Investor share percentage (default: 1.0 for 100\%)
 \item origination_fee: Origination fee rate (default: 0.0000)
 \item interest_on_starting_balance: Calculate interest before or after prepay/losses (default: FALSE)
+\item credit_loss_reduces_interest: Whether credit losses reduce interest cash flows (default: TRUE).
+By default, credit losses are applied against investor cash flows before distribution to investors.
+When set to FALSE, credit losses reduce principal balances only and do not directly reduce interest cash flows.
 \item de_minimis_balance: Threshold below which balance is forced to zero (default: 1.00)
 \item cpr_vec: Named vector of CPR rates by tier (default: c("default" = 0.0))
 \item credit_cost_vec: Named vector of annual credit cost rates by tier (default: c("default" = 0.0))
 \item pd_vec: Optional named vector of PD rates (overrides credit_cost_vec if provided)
 \item lgd_vec: Optional named vector of LGD rates (overrides credit_cost_vec if provided)
 \item return_monthly_totals: Whether to return aggregated monthly totals (default: FALSE)
+\item monthly_totals_group_vars: Optional character vector of column names to group monthly totals by,
+in addition to date (default: NULL). For example, c("tier") to see monthly totals by tier.
 \item show_progress: Show progress messages for large portfolios (default: TRUE)
 }
 }

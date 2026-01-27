@@ -280,3 +280,272 @@ test_that("calculate_cash_flows shows progress for large portfolios", {
     "Processing.*loans"
   )
 })
+
+# Helper function to create test data with tiers
+create_test_portfolio_with_tiers <- function(n_loans = 3) {
+  data.frame(
+    LOAN_ID = paste0("L", sprintf("%03d", 1:n_loans)),
+    balance = rep(10000, n_loans),
+    current_interest_rate = rep(0.06, n_loans),
+    months_to_maturity = rep(12, n_loans),
+    eff_date = as.Date("2025-01-01"),
+    tier = c("A", "B", "A")[1:n_loans],
+    stringsAsFactors = FALSE
+  )
+}
+
+# Test 16: monthly_totals_group_vars - group by tier
+test_that("monthly_totals_group_vars allows grouping by additional variables", {
+  loan_data <- create_test_portfolio_with_tiers(3)
+
+  config <- list(
+    col_tier = "tier",
+    cpr_vec = c("A" = 0.05, "B" = 0.10),
+    credit_cost_vec = c("A" = 0.01, "B" = 0.02),
+    return_monthly_totals = TRUE,
+    monthly_totals_group_vars = c("tier")
+  )
+
+  result <- calculate_cash_flows(loan_data, config)
+
+  # Should have columns: date, tier, and all the totals
+  expect_true("tier" %in% names(result$monthly_totals))
+  expect_true("date" %in% names(result$monthly_totals))
+
+  # Should have rows for each date-tier combination
+  n_unique_dates <- length(unique(result$loan_cash_flows$date))
+  n_unique_tiers <- length(unique(loan_data$tier))
+  expect_gte(nrow(result$monthly_totals), n_unique_tiers)
+})
+
+# Test 17: monthly_totals_group_vars with invalid column
+test_that("monthly_totals_group_vars warns on invalid columns", {
+  loan_data <- create_test_portfolio_with_tiers(2)
+
+  config <- list(
+    return_monthly_totals = TRUE,
+    monthly_totals_group_vars = c("nonexistent_column")
+  )
+
+  expect_warning(
+    calculate_cash_flows(loan_data, config),
+    "not in cash flows data"
+  )
+})
+
+# Test 18: credit_loss_reduces_interest = TRUE (default)
+test_that("credit_loss_reduces_interest = TRUE reduces net interest", {
+  loan_data <- create_test_portfolio(1)
+
+  config <- list(
+    cpr_vec = c("default" = 0.0),
+    credit_cost_vec = c("default" = 0.02),  # 2% credit cost
+    servicing_fee = 0.0,
+    credit_loss_reduces_interest = TRUE  # Default behavior
+  )
+
+  result <- calculate_cash_flows(loan_data, config)
+
+  # Net interest should be less than gross interest due to credit losses
+  expect_lt(
+    sum(result$net_interest),
+    sum(result$gross_interest)
+  )
+
+  # Verify credit losses were subtracted from interest
+  # net_interest_raw should = gross_interest - credit_loss (no fees in this test)
+  first_row <- result[1, ]
+  expect_equal(
+    first_row$net_interest,
+    max(0, first_row$gross_interest - first_row$credit_loss)
+  )
+})
+
+# Test 19: credit_loss_reduces_interest = FALSE
+test_that("credit_loss_reduces_interest = FALSE does not reduce net interest", {
+  loan_data <- create_test_portfolio(1)
+
+  config <- list(
+    cpr_vec = c("default" = 0.0),
+    credit_cost_vec = c("default" = 0.02),  # 2% credit cost
+    servicing_fee = 0.0,
+    origination_fee = 0.0,
+    credit_loss_reduces_interest = FALSE  # Alternative accounting
+  )
+
+  result <- calculate_cash_flows(loan_data, config)
+
+  # Net interest should equal gross interest (credit losses don't affect it)
+  expect_equal(
+    sum(result$net_interest),
+    sum(result$gross_interest)
+  )
+
+  # But credit losses still reduce principal
+  expect_gt(sum(result$credit_loss), 0)
+})
+
+# Test 20: annual_reporting_fee is properly annualized
+test_that("annual_reporting_fee is divided by 12 for monthly calculation", {
+  loan_data <- create_test_portfolio(1)
+
+  # Set annual reporting fee to 12 bps (0.0012)
+  # Monthly should be 1 bp (0.0001)
+  config <- list(
+    servicing_fee = 0.0,
+    annual_reporting_fee = 0.0012,
+    return_monthly_totals = TRUE
+  )
+
+  result <- calculate_cash_flows(loan_data, config)
+
+  # Check first month reporting fee
+  first_month_reporting <- result$loan_cash_flows$reporting_fee_amt[1]
+  first_month_balance <- result$loan_cash_flows$accrual_balance[1]
+
+  # Should be approximately balance * (0.0012/12)
+  expected_reporting <- first_month_balance * (0.0012 / 12)
+  expect_equal(first_month_reporting, expected_reporting, tolerance = 0.01)
+})
+
+# Test 21: Fee columns are split correctly
+test_that("servicing_fee_amt, reporting_fee_amt, and total_fees are correct", {
+  loan_data <- create_test_portfolio(1)
+
+  config <- list(
+    servicing_fee = 0.0024,  # 24 bps annual
+    annual_reporting_fee = 0.0012,  # 12 bps annual
+    cpr_vec = c("default" = 0.0),
+    credit_cost_vec = c("default" = 0.0)
+  )
+
+  result <- calculate_cash_flows(loan_data, config)
+
+  # Check all three fee columns exist
+  expect_true("servicing_fee_amt" %in% names(result))
+  expect_true("reporting_fee_amt" %in% names(result))
+  expect_true("total_fees" %in% names(result))
+
+  # Verify total_fees = servicing_fee_amt + reporting_fee_amt
+  expect_equal(
+    result$total_fees,
+    result$servicing_fee_amt + result$reporting_fee_amt
+  )
+
+  # Check first month calculation
+  first_balance <- result$accrual_balance[1]
+  expect_equal(
+    result$servicing_fee_amt[1],
+    first_balance * (0.0024 / 12),
+    tolerance = 0.01
+  )
+  expect_equal(
+    result$reporting_fee_amt[1],
+    first_balance * (0.0012 / 12),
+    tolerance = 0.01
+  )
+})
+
+# Test 22: Prepayment is capped at available balance after credit loss
+test_that("prepayment cannot exceed available balance after credit loss", {
+  loan_data <- create_test_portfolio(1)
+
+  # High CPR and high credit cost - might cause prepayment to exceed available
+  config <- list(
+    cpr_vec = c("default" = 0.50),  # 50% CPR
+    credit_cost_vec = c("default" = 0.40)  # 40% credit cost
+  )
+
+  result <- calculate_cash_flows(loan_data, config)
+
+  # For each month, verify prepayment + credit_loss <= starting_balance
+  for (i in 1:nrow(result)) {
+    expect_lte(
+      result$prepayment[i] + result$credit_loss[i],
+      result$starting_balance[i] + 0.01  # Small tolerance for rounding
+    )
+  }
+})
+
+# Test 23: Enforce "default" tier when col_tier is NULL
+test_that("validate_config enforces 'default' tier when col_tier is NULL", {
+  loan_data <- create_test_portfolio(1)
+
+  # Config without "default" tier
+  config <- list(
+    col_tier = NULL,
+    cpr_vec = c("A" = 0.05, "B" = 0.10),  # Missing "default"
+    credit_cost_vec = c("A" = 0.01, "B" = 0.02)
+  )
+
+  expect_error(
+    calculate_cash_flows(loan_data, config),
+    "must contain a 'default' tier"
+  )
+})
+
+# Test 24: "default" tier is used when tier column missing
+test_that("'default' tier is used when col_tier is NULL", {
+  loan_data <- create_test_portfolio(2)
+
+  config <- list(
+    col_tier = NULL,
+    cpr_vec = c("default" = 0.08),
+    credit_cost_vec = c("default" = 0.015)
+  )
+
+  result <- calculate_cash_flows(loan_data, config)
+
+  # Should have cash flows for both loans using default tier
+  expect_equal(length(unique(result$LOAN_ID)), 2)
+
+  # All loans should have same prepayment rate (from default tier)
+  prepay_rates <- result %>%
+    group_by(LOAN_ID, month) %>%
+    summarise(prepay_rate = prepayment / starting_balance, .groups = "drop")
+
+  # Rates should be similar across loans (allowing for rounding)
+  expect_lt(sd(prepay_rates$prepay_rate), 0.001)
+})
+
+# Test 25: Date conversion is persisted
+test_that("character dates are converted and persisted", {
+  loan_data <- create_test_portfolio(1)
+  loan_data$eff_date <- "2025-01-01"  # Character, not Date
+
+  # Should convert and work without error
+  expect_message(
+    result <- calculate_cash_flows(loan_data, config = list()),
+    "Converted.*to Date format"
+  )
+
+  expect_s3_class(result, "data.frame")
+  expect_true(nrow(result) > 0)
+})
+
+# Test 26: Investor total calculation with credit_loss_reduces_interest
+test_that("investor_total reflects credit_loss_reduces_interest setting", {
+  loan_data <- create_test_portfolio(1)
+
+  base_config <- list(
+    cpr_vec = c("default" = 0.0),
+    credit_cost_vec = c("default" = 0.02),
+    servicing_fee = 0.001,
+    investor_share = 1.0,
+    return_monthly_totals = TRUE
+  )
+
+  # Test with credit_loss_reduces_interest = TRUE
+  config_true <- modifyList(base_config, list(credit_loss_reduces_interest = TRUE))
+  result_true <- calculate_cash_flows(loan_data, config_true)
+
+  # Test with credit_loss_reduces_interest = FALSE
+  config_false <- modifyList(base_config, list(credit_loss_reduces_interest = FALSE))
+  result_false <- calculate_cash_flows(loan_data, config_false)
+
+  # investor_total should be higher when credit losses don't reduce interest
+  expect_gt(
+    sum(result_false$monthly_totals$investor_total),
+    sum(result_true$monthly_totals$investor_total)
+  )
+})

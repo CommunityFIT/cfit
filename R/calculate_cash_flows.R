@@ -1,10 +1,11 @@
 # Global variables for NSE in dplyr
 utils::globalVariables(c(
   "starting_balance", "adjusted_balance", "scheduled_payment",
-  "gross_interest", "servicing_fee", "scheduled_principal",
-  "prepayment", "total_principal", "credit_loss", "remaining_balance",
-  "net_interest", "total_payment", "investor_principal",
-  "investor_interest", "investor_total", "orig_fee", "net_interest_raw"
+  "gross_interest", "servicing_fee_amt", "reporting_fee_amt", "total_fees",
+  "scheduled_principal", "prepayment", "total_principal", "credit_loss",
+  "remaining_balance", "net_interest", "total_payment", "investor_principal",
+  "investor_interest", "investor_total", "orig_fee", "net_interest_raw",
+  "date", "."
 ))
 
 #' Calculate Loan Portfolio Cash Flows
@@ -19,9 +20,10 @@ utils::globalVariables(c(
 #'   \itemize{
 #'     \item If FALSE: A data frame with loan-level cash flows containing columns:
 #'       LOAN_ID, month, date, starting_balance, adjusted_balance, accrual_balance,
-#'       scheduled_payment, gross_interest, servicing_fee, scheduled_principal,
-#'       prepayment, total_principal, credit_loss, remaining_balance, orig_fee,
-#'       net_interest, total_payment, investor_principal, investor_interest, investor_total
+#'       scheduled_payment, gross_interest, servicing_fee_amt, reporting_fee_amt,
+#'       total_fees, scheduled_principal, prepayment, total_principal, credit_loss,
+#'       remaining_balance, orig_fee, net_interest, total_payment, investor_principal,
+#'       investor_interest, investor_total
 #'     \item If TRUE: A list with two elements:
 #'       \itemize{
 #'         \item loan_cash_flows: Detailed loan-level cash flows (data frame)
@@ -41,16 +43,21 @@ utils::globalVariables(c(
 #'   \item col_monthly_payment: Column name for monthly payment (default: NULL, optional)
 #'   \item col_orig_balance: Column name for original balance (default: NULL, optional)
 #'   \item servicing_fee: Annual servicing fee rate as decimal (default: 0.0025)
-#'   \item monthly_reporting_fee: Monthly reporting fee rate (default: 0.00)
+#'   \item annual_reporting_fee: Annual reporting fee rate as decimal (default: 0.00)
 #'   \item investor_share: Investor share percentage (default: 1.0 for 100%)
 #'   \item origination_fee: Origination fee rate (default: 0.0000)
 #'   \item interest_on_starting_balance: Calculate interest before or after prepay/losses (default: FALSE)
+#'   \item credit_loss_reduces_interest: Whether credit losses reduce interest cash flows (default: TRUE).
+#'     By default, credit losses are applied against investor cash flows before distribution to investors.
+#'     When set to FALSE, credit losses reduce principal balances only and do not directly reduce interest cash flows.
 #'   \item de_minimis_balance: Threshold below which balance is forced to zero (default: 1.00)
 #'   \item cpr_vec: Named vector of CPR rates by tier (default: c("default" = 0.0))
 #'   \item credit_cost_vec: Named vector of annual credit cost rates by tier (default: c("default" = 0.0))
 #'   \item pd_vec: Optional named vector of PD rates (overrides credit_cost_vec if provided)
 #'   \item lgd_vec: Optional named vector of LGD rates (overrides credit_cost_vec if provided)
 #'   \item return_monthly_totals: Whether to return aggregated monthly totals (default: FALSE)
+#'   \item monthly_totals_group_vars: Optional character vector of column names to group monthly totals by,
+#'     in addition to date (default: NULL). For example, c("tier") to see monthly totals by tier.
 #'   \item show_progress: Show progress messages for large portfolios (default: TRUE)
 #' }
 #'
@@ -125,10 +132,11 @@ calculate_cash_flows <- function(data, config = list()) {
 
     # Parameter defaults
     servicing_fee = 0.0025,
-    monthly_reporting_fee = 0.00,
+    annual_reporting_fee = 0.00,
     investor_share = 1.0,
     origination_fee = 0.0000,
     interest_on_starting_balance = FALSE,
+    credit_loss_reduces_interest = TRUE,
     de_minimis_balance = 1.00,
 
     # CPR and credit cost vectors (all zeros by default)
@@ -141,6 +149,7 @@ calculate_cash_flows <- function(data, config = list()) {
 
     # Output options
     return_monthly_totals = FALSE,
+    monthly_totals_group_vars = NULL,
     show_progress = TRUE
   )
 
@@ -172,8 +181,8 @@ calculate_cash_flows <- function(data, config = list()) {
     cfg$col_loanid <- "LOAN_ID"
   }
 
-  # Validate data quality
-  validate_data(data, cfg)
+  # Validate and clean data (returns mutated data frame)
+  data <- validate_data(data, cfg)
 
   # Check if tier column exists
   has_tier <- !is.null(cfg$col_tier) && cfg$col_tier %in% names(data)
@@ -217,6 +226,13 @@ calculate_cash_flows <- function(data, config = list()) {
     message("Processing ", format(nrow(data), big.mark = ","), " loans...")
   }
 
+  # Prepare grouping columns to pass through
+  group_cols_to_pass <- NULL
+  if (!is.null(cfg$monthly_totals_group_vars)) {
+    # Only include group vars that exist in data
+    group_cols_to_pass <- intersect(cfg$monthly_totals_group_vars, names(data))
+  }
+
   # Apply cash flow generation to each loan
   cash_flows_list <- purrr::pmap(
     list(
@@ -227,7 +243,15 @@ calculate_cash_flows <- function(data, config = list()) {
       start_date = data[[cfg$col_start_date]],
       tier = if (has_tier) data[[cfg$col_tier]] else default_tier,
       monthly_payment_val = if (!is.null(cfg$col_monthly_payment)) data[[cfg$col_monthly_payment]] else NA_real_,
-      origbalance = if (!is.null(cfg$col_orig_balance)) data[[cfg$col_orig_balance]] else NA_real_
+      origbalance = if (!is.null(cfg$col_orig_balance)) data[[cfg$col_orig_balance]] else NA_real_,
+      # Pass additional columns for grouping
+      extra_cols = if (!is.null(group_cols_to_pass)) {
+        lapply(seq_len(nrow(data)), function(i) {
+          as.list(data[i, group_cols_to_pass, drop = FALSE])
+        })
+      } else {
+        rep(list(NULL), nrow(data))
+      }
     ),
     .f = generate_single_loan_cash_flow,
     cfg = cfg,
@@ -244,14 +268,33 @@ calculate_cash_flows <- function(data, config = list()) {
 
   # Return based on monthly_totals flag
   if (cfg$return_monthly_totals) {
+
+    # Build grouping variables - always include date
+    group_cols <- c("date", cfg$monthly_totals_group_vars)
+
+    # Validate group_vars exist in loan_cash_flows
+    if (!is.null(cfg$monthly_totals_group_vars)) {
+      missing_group_cols <- setdiff(cfg$monthly_totals_group_vars, names(loan_cash_flows))
+      if (length(missing_group_cols) > 0) {
+        warning(
+          "The following monthly_totals_group_vars are not in cash flows data: ",
+          paste(missing_group_cols, collapse = ", "),
+          ". They will be ignored."
+        )
+        group_cols <- intersect(group_cols, names(loan_cash_flows))
+      }
+    }
+
     monthly_totals <- loan_cash_flows %>%
-      dplyr::group_by(date) %>%
+      dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
       dplyr::summarise(
         starting_balance = sum(starting_balance, na.rm = TRUE),
         adjusted_balance = sum(adjusted_balance, na.rm = TRUE),
         scheduled_payment = sum(scheduled_payment, na.rm = TRUE),
         gross_interest = sum(gross_interest, na.rm = TRUE),
-        servicing_fee = sum(servicing_fee, na.rm = TRUE),
+        servicing_fee_amt = sum(servicing_fee_amt, na.rm = TRUE),
+        reporting_fee_amt = sum(reporting_fee_amt, na.rm = TRUE),
+        total_fees = sum(total_fees, na.rm = TRUE),
         scheduled_principal = sum(scheduled_principal, na.rm = TRUE),
         prepayment = sum(prepayment, na.rm = TRUE),
         total_principal = sum(total_principal, na.rm = TRUE),
@@ -298,9 +341,24 @@ validate_config <- function(cfg, data) {
     )
   }
 
+  # Enforce "default" tier when col_tier is NULL
+  if (is.null(cfg$col_tier) || !cfg$col_tier %in% names(data)) {
+    if (!"default" %in% names(cfg$cpr_vec)) {
+      stop(
+        "When col_tier is NULL or tier column is missing, ",
+        "cpr_vec and credit_cost_vec must contain a 'default' tier.\n",
+        "Current cpr_vec tiers: ", paste(names(cfg$cpr_vec), collapse = ", ")
+      )
+    }
+  }
+
   # Validate parameter ranges
   if (cfg$servicing_fee < 0 || cfg$servicing_fee > 1) {
     stop("servicing_fee must be between 0 and 1 (as a decimal). Got: ", cfg$servicing_fee)
+  }
+
+  if (cfg$annual_reporting_fee < 0 || cfg$annual_reporting_fee > 1) {
+    stop("annual_reporting_fee must be between 0 and 1 (as a decimal). Got: ", cfg$annual_reporting_fee)
   }
 
   if (cfg$investor_share < 0 || cfg$investor_share > 1) {
@@ -321,11 +379,18 @@ validate_config <- function(cfg, data) {
     stop("All credit cost values must be between 0 and 1 (as decimals). Check credit_cost_vec.")
   }
 
+  # Validate monthly_totals_group_vars
+  if (!is.null(cfg$monthly_totals_group_vars)) {
+    if (!is.character(cfg$monthly_totals_group_vars)) {
+      stop("monthly_totals_group_vars must be a character vector of column names.")
+    }
+  }
+
   invisible(TRUE)
 }
 
 
-# Data validation helper function
+# Data validation helper function - RETURNS mutated data
 validate_data <- function(data, cfg) {
 
   # Check for NA values in required columns
@@ -386,11 +451,11 @@ validate_data <- function(data, cfg) {
     }
   }
 
-  # Validate date column
+  # Validate and convert date column - PERSIST THE CONVERSION
   if (!inherits(data[[cfg$col_start_date]], "Date")) {
-    # Try to convert to Date
     tryCatch({
       data[[cfg$col_start_date]] <- as.Date(data[[cfg$col_start_date]])
+      message("Converted '", cfg$col_start_date, "' to Date format.")
     }, error = function(e) {
       stop(
         "Column '", cfg$col_start_date, "' cannot be converted to Date format. ",
@@ -399,7 +464,8 @@ validate_data <- function(data, cfg) {
     })
   }
 
-  invisible(TRUE)
+  # Return the mutated data frame
+  return(data)
 }
 
 
@@ -413,7 +479,8 @@ generate_single_loan_cash_flow <- function(loan_id,
                                            monthly_payment_val,
                                            origbalance,
                                            cfg,
-                                           default_tier) {
+                                           default_tier,
+                                           extra_cols = NULL) {
 
   # Input validation - return empty if invalid
   if (is.na(principal) || is.na(rate) || is.na(term) || is.na(start_date) ||
@@ -440,7 +507,7 @@ generate_single_loan_cash_flow <- function(loan_id,
   # Monthly rates and factors
   monthly_rate <- rate / 12
   monthly_servicing <- cfg$servicing_fee / 12
-  monthly_reporting <- cfg$monthly_reporting_fee
+  monthly_reporting <- cfg$annual_reporting_fee / 12  # FIXED: Now properly annualized
   monthly_credit_cost <- cfg$credit_cost_vec[[tier]] / 12
   monthly_smm <- 1 - (1 - cfg$cpr_vec[[tier]])^(1/12)  # Single Monthly Mortality
 
@@ -461,9 +528,9 @@ generate_single_loan_cash_flow <- function(loan_id,
   balance <- principal
   min_balance <- 0.01
 
-  # Pre-calculate all dates for better performance
+  # Pre-calculate all dates for better performance (FIXED: use base R months)
   max_months <- term
-  all_dates <- start_date + months(0:(max_months - 1))
+  all_dates <- seq.Date(start_date, by = "month", length.out = max_months)
 
   # Pre-allocate list with expected size
   cash_flows <- vector("list", term)
@@ -474,9 +541,12 @@ generate_single_loan_cash_flow <- function(loan_id,
 
     starting_balance <- balance
 
-    # Calculate prepayment and credit loss (always on starting balance)
-    prepayment <- starting_balance * monthly_smm
+    # Calculate credit loss first (on starting balance)
     credit_loss <- starting_balance * monthly_credit_cost
+
+    # Calculate prepayment - FIXED: Cap at available balance after credit loss
+    max_prepayment <- max(0, starting_balance - credit_loss)
+    prepayment <- min(starting_balance * monthly_smm, max_prepayment)
 
     # Calculate adjusted balance (after prepayment and credit loss)
     adjusted_balance <- starting_balance - prepayment - credit_loss
@@ -515,7 +585,7 @@ generate_single_loan_cash_flow <- function(loan_id,
     }
 
     # Store cash flow with pre-calculated date
-    cash_flows[[i]] <- tibble::tibble(
+    cash_flow_row <- tibble::tibble(
       LOAN_ID = loan_id,
       month = i,
       date = all_dates[i],
@@ -524,13 +594,24 @@ generate_single_loan_cash_flow <- function(loan_id,
       accrual_balance = accrual_balance,
       scheduled_payment = scheduled_payment,
       gross_interest = gross_interest,
-      servicing_fee = total_fees,
+      servicing_fee_amt = servicing_fee_amt,
+      reporting_fee_amt = reporting_fee_amt,
+      total_fees = total_fees,
       scheduled_principal = scheduled_principal,
       prepayment = prepayment,
       total_principal = total_principal,
       credit_loss = credit_loss,
       remaining_balance = remaining_balance
     )
+
+    # Add extra columns if provided (for grouping)
+    if (!is.null(extra_cols) && length(extra_cols) > 0) {
+      for (col_name in names(extra_cols)) {
+        cash_flow_row[[col_name]] <- extra_cols[[col_name]]
+      }
+    }
+
+    cash_flows[[i]] <- cash_flow_row
 
     balance <- remaining_balance
     i <- i + 1
@@ -553,13 +634,22 @@ generate_single_loan_cash_flow <- function(loan_id,
   }
 
   # Add investor calculations with origination fee
+  # FIXED: Make credit_loss_reduces_interest configurable
   cash_flows_df <- cash_flows_df %>%
     dplyr::mutate(
       # Origination fee (same for all months)
       orig_fee = monthly_orig_fee,
 
-      # Calculate net interest with floor at zero
-      net_interest_raw = gross_interest - servicing_fee - orig_fee - credit_loss,
+      # Calculate net interest based on accounting treatment
+      net_interest_raw = if (cfg$credit_loss_reduces_interest) {
+        # Default: credit losses reduce interest (participation accounting)
+        gross_interest - total_fees - orig_fee - credit_loss
+      } else {
+        # Alternative: credit losses only reduce principal (balance sheet accounting)
+        gross_interest - total_fees - orig_fee
+      },
+
+      # Floor at zero (investor never pays servicer)
       net_interest = pmax(net_interest_raw, 0),
 
       # Track how much orig fee was "absorbed" due to insufficient interest
@@ -580,4 +670,3 @@ generate_single_loan_cash_flow <- function(loan_id,
 
   return(cash_flows_df)
 }
-

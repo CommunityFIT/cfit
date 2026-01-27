@@ -1,3 +1,24 @@
+# cfit 0.2.1
+
+## Bug Fixes and Improvements
+
+**Critical Fixes:**
+* Fixed date conversion persistence - character dates are now properly converted and maintained throughout processing
+* Fixed prepayment calculation to cap at available balance after credit losses
+* Fixed `months()` namespace issue for better package reliability
+* Renamed `monthly_reporting_fee` to `annual_reporting_fee` for consistency with other annual rate parameters
+
+**New Features:**
+* Added `credit_loss_reduces_interest` parameter (default: TRUE) - configurable accounting treatment for credit losses. By default, credit losses are applied against investor cash flows before distribution to investors. When set to FALSE, credit losses reduce principal balances only and do not directly reduce interest cash flows.
+* Added `monthly_totals_group_vars` parameter - allows grouping monthly totals by additional variables (e.g., tier, product type) beyond date
+* Split fee reporting for transparency: `servicing_fee_amt`, `reporting_fee_amt`, and `total_fees` columns
+
+**Enhanced Validation:**
+* Enforced "default" tier requirement when tier column is not specified
+* Added explicit `dplyr::` namespace calls for better compatibility
+* Improved error messages and validation checks
+---
+
 # cfit 0.2.0
 
 ## New Functions
