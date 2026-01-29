@@ -1,3 +1,18 @@
+# cfit 0.2.2
+
+## Bug Fixes
+
+* **Critical**: Fixed credit loss calculation to cap at 100% of balance - prevents mathematical impossibility where credit losses could exceed loan balance
+* Fixed prepayment calculation to properly cap at available balance after credit losses are applied
+* Fixed date handling to use base R `seq.Date()` for more reliable month-end date arithmetic
+
+## Improvements
+
+* Simplified grouping column handling - now uses efficient lookup table join instead of complex parameter passing
+* Removed unnecessary date conversion messages for cleaner output
+* Monthly totals now automatically sorted by date and grouping variables for predictable output
+* Minor documentation fixes and clarifications
+
 # cfit 0.2.1
 
 ## Bug Fixes and Improvements

@@ -61,7 +61,7 @@ utils::globalVariables(c(
 #'   \item show_progress: Show progress messages for large portfolios (default: TRUE)
 #' }
 #'
-#' @importFrom dplyr bind_rows group_by summarise mutate if_else select
+#' @importFrom dplyr bind_rows group_by summarise mutate if_else select left_join distinct across all_of arrange
 #' @importFrom purrr pmap
 #' @importFrom lubridate %m+%
 #' @importFrom tibble tibble
@@ -226,13 +226,6 @@ calculate_cash_flows <- function(data, config = list()) {
     message("Processing ", format(nrow(data), big.mark = ","), " loans...")
   }
 
-  # Prepare grouping columns to pass through
-  group_cols_to_pass <- NULL
-  if (!is.null(cfg$monthly_totals_group_vars)) {
-    # Only include group vars that exist in data
-    group_cols_to_pass <- intersect(cfg$monthly_totals_group_vars, names(data))
-  }
-
   # Apply cash flow generation to each loan
   cash_flows_list <- purrr::pmap(
     list(
@@ -243,15 +236,7 @@ calculate_cash_flows <- function(data, config = list()) {
       start_date = data[[cfg$col_start_date]],
       tier = if (has_tier) data[[cfg$col_tier]] else default_tier,
       monthly_payment_val = if (!is.null(cfg$col_monthly_payment)) data[[cfg$col_monthly_payment]] else NA_real_,
-      origbalance = if (!is.null(cfg$col_orig_balance)) data[[cfg$col_orig_balance]] else NA_real_,
-      # Pass additional columns for grouping
-      extra_cols = if (!is.null(group_cols_to_pass)) {
-        lapply(seq_len(nrow(data)), function(i) {
-          as.list(data[i, group_cols_to_pass, drop = FALSE])
-        })
-      } else {
-        rep(list(NULL), nrow(data))
-      }
+      origbalance = if (!is.null(cfg$col_orig_balance)) data[[cfg$col_orig_balance]] else NA_real_
     ),
     .f = generate_single_loan_cash_flow,
     cfg = cfg,
@@ -260,6 +245,20 @@ calculate_cash_flows <- function(data, config = list()) {
 
   # Bind all loan cash flows
   loan_cash_flows <- dplyr::bind_rows(cash_flows_list)
+
+  # Join grouping columns back if needed (simpler than passing through pmap)
+  if (!is.null(cfg$monthly_totals_group_vars)) {
+    group_cols_available <- intersect(cfg$monthly_totals_group_vars, names(data))
+    if (length(group_cols_available) > 0) {
+      lookup <- data[, c(cfg$col_loanid, group_cols_available), drop = FALSE]
+      names(lookup)[1] <- "LOAN_ID"
+      loan_cash_flows <- dplyr::left_join(
+        loan_cash_flows,
+        dplyr::distinct(lookup),  # Ensure unique loan IDs
+        by = "LOAN_ID"
+      )
+    }
+  }
 
   if (cfg$show_progress && nrow(data) > 1000) {
     message("Cash flows generated successfully: ",
@@ -306,7 +305,8 @@ calculate_cash_flows <- function(data, config = list()) {
         investor_interest = sum(investor_interest, na.rm = TRUE),
         investor_total = sum(investor_total, na.rm = TRUE),
         .groups = "drop"
-      )
+      ) %>%
+      dplyr::arrange(dplyr::across(dplyr::all_of(group_cols)))  # Ensure sorted by date + groups
 
     return(list(
       loan_cash_flows = loan_cash_flows,
@@ -451,11 +451,10 @@ validate_data <- function(data, cfg) {
     }
   }
 
-  # Validate and convert date column - PERSIST THE CONVERSION
+  # Validate and convert date column - PERSIST THE CONVERSION (CHANGE 4: Remove message)
   if (!inherits(data[[cfg$col_start_date]], "Date")) {
     tryCatch({
       data[[cfg$col_start_date]] <- as.Date(data[[cfg$col_start_date]])
-      message("Converted '", cfg$col_start_date, "' to Date format.")
     }, error = function(e) {
       stop(
         "Column '", cfg$col_start_date, "' cannot be converted to Date format. ",
@@ -479,8 +478,7 @@ generate_single_loan_cash_flow <- function(loan_id,
                                            monthly_payment_val,
                                            origbalance,
                                            cfg,
-                                           default_tier,
-                                           extra_cols = NULL) {
+                                           default_tier) {
 
   # Input validation - return empty if invalid
   if (is.na(principal) || is.na(rate) || is.na(term) || is.na(start_date) ||
@@ -507,7 +505,7 @@ generate_single_loan_cash_flow <- function(loan_id,
   # Monthly rates and factors
   monthly_rate <- rate / 12
   monthly_servicing <- cfg$servicing_fee / 12
-  monthly_reporting <- cfg$annual_reporting_fee / 12  # FIXED: Now properly annualized
+  monthly_reporting <- cfg$annual_reporting_fee / 12
   monthly_credit_cost <- cfg$credit_cost_vec[[tier]] / 12
   monthly_smm <- 1 - (1 - cfg$cpr_vec[[tier]])^(1/12)  # Single Monthly Mortality
 
@@ -528,7 +526,7 @@ generate_single_loan_cash_flow <- function(loan_id,
   balance <- principal
   min_balance <- 0.01
 
-  # Pre-calculate all dates for better performance (FIXED: use base R months)
+  # CHANGE 2: Use base R seq() with months for better month-end handling than lubridate
   max_months <- term
   all_dates <- seq.Date(start_date, by = "month", length.out = max_months)
 
@@ -541,10 +539,10 @@ generate_single_loan_cash_flow <- function(loan_id,
 
     starting_balance <- balance
 
-    # Calculate credit loss first (on starting balance)
-    credit_loss <- starting_balance * monthly_credit_cost
+    # CHANGE 1: Cap credit loss at 100% of starting balance
+    credit_loss <- min(starting_balance * monthly_credit_cost, starting_balance)
 
-    # Calculate prepayment - FIXED: Cap at available balance after credit loss
+    # Calculate prepayment - Cap at available balance after credit loss
     max_prepayment <- max(0, starting_balance - credit_loss)
     prepayment <- min(starting_balance * monthly_smm, max_prepayment)
 
@@ -585,7 +583,7 @@ generate_single_loan_cash_flow <- function(loan_id,
     }
 
     # Store cash flow with pre-calculated date
-    cash_flow_row <- tibble::tibble(
+    cash_flows[[i]] <- tibble::tibble(
       LOAN_ID = loan_id,
       month = i,
       date = all_dates[i],
@@ -603,15 +601,6 @@ generate_single_loan_cash_flow <- function(loan_id,
       credit_loss = credit_loss,
       remaining_balance = remaining_balance
     )
-
-    # Add extra columns if provided (for grouping)
-    if (!is.null(extra_cols) && length(extra_cols) > 0) {
-      for (col_name in names(extra_cols)) {
-        cash_flow_row[[col_name]] <- extra_cols[[col_name]]
-      }
-    }
-
-    cash_flows[[i]] <- cash_flow_row
 
     balance <- remaining_balance
     i <- i + 1
@@ -634,7 +623,6 @@ generate_single_loan_cash_flow <- function(loan_id,
   }
 
   # Add investor calculations with origination fee
-  # FIXED: Make credit_loss_reduces_interest configurable
   cash_flows_df <- cash_flows_df %>%
     dplyr::mutate(
       # Origination fee (same for all months)

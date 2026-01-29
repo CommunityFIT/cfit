@@ -513,11 +513,8 @@ test_that("character dates are converted and persisted", {
   loan_data <- create_test_portfolio(1)
   loan_data$eff_date <- "2025-01-01"  # Character, not Date
 
-  # Should convert and work without error
-  expect_message(
-    result <- calculate_cash_flows(loan_data, config = list()),
-    "Converted.*to Date format"
-  )
+  # Should convert silently and work without error
+  result <- calculate_cash_flows(loan_data, config = list())
 
   expect_s3_class(result, "data.frame")
   expect_true(nrow(result) > 0)
