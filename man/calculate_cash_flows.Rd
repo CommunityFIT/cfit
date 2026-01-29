@@ -15,7 +15,7 @@ calculate_cash_flows(data, config = list())
 Depending on return_monthly_totals setting:
 \itemize{
 \item If FALSE: A data frame with loan-level cash flows containing columns:
-LOAN_ID, month, date, starting_balance, adjusted_balance, accrual_balance,
+LOAN_ID, rate, tier, month, date, starting_balance, adjusted_balance, accrual_balance,
 scheduled_payment, gross_interest, servicing_fee_amt, reporting_fee_amt,
 total_fees, scheduled_principal, prepayment, total_principal, credit_loss,
 remaining_balance, orig_fee, net_interest, total_payment, investor_principal,

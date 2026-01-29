@@ -19,7 +19,7 @@ utils::globalVariables(c(
 #' @return Depending on return_monthly_totals setting:
 #'   \itemize{
 #'     \item If FALSE: A data frame with loan-level cash flows containing columns:
-#'       LOAN_ID, month, date, starting_balance, adjusted_balance, accrual_balance,
+#'       LOAN_ID, rate, tier, month, date, starting_balance, adjusted_balance, accrual_balance,
 #'       scheduled_payment, gross_interest, servicing_fee_amt, reporting_fee_amt,
 #'       total_fees, scheduled_principal, prepayment, total_principal, credit_loss,
 #'       remaining_balance, orig_fee, net_interest, total_payment, investor_principal,
@@ -249,8 +249,11 @@ calculate_cash_flows <- function(data, config = list()) {
   # Join grouping columns back if needed (simpler than passing through pmap)
   if (!is.null(cfg$monthly_totals_group_vars)) {
     group_cols_available <- intersect(cfg$monthly_totals_group_vars, names(data))
-    if (length(group_cols_available) > 0) {
-      lookup <- data[, c(cfg$col_loanid, group_cols_available), drop = FALSE]
+    # Only join columns that don't already exist in loan_cash_flows
+    cols_to_join <- setdiff(group_cols_available, names(loan_cash_flows))
+
+    if (length(cols_to_join) > 0) {
+      lookup <- data[, c(cfg$col_loanid, cols_to_join), drop = FALSE]
       names(lookup)[1] <- "LOAN_ID"
       loan_cash_flows <- dplyr::left_join(
         loan_cash_flows,
@@ -585,6 +588,8 @@ generate_single_loan_cash_flow <- function(loan_id,
     # Store cash flow with pre-calculated date
     cash_flows[[i]] <- tibble::tibble(
       LOAN_ID = loan_id,
+      rate = rate,
+      tier = tier,
       month = i,
       date = all_dates[i],
       starting_balance = starting_balance,
