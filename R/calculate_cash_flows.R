@@ -19,7 +19,7 @@ utils::globalVariables(c(
 #' @return Depending on return_monthly_totals setting:
 #'   \itemize{
 #'     \item If FALSE: A data frame with loan-level cash flows containing columns:
-#'       LOAN_ID, rate, tier, month, date, starting_balance, adjusted_balance, accrual_balance,
+#'       LOAN_ID, eff_date, rate, tier, month, date, starting_balance, adjusted_balance, accrual_balance,
 #'       scheduled_payment, gross_interest, servicing_fee_amt, reporting_fee_amt,
 #'       total_fees, scheduled_principal, prepayment, total_principal, credit_loss,
 #'       remaining_balance, orig_fee, net_interest, total_payment, investor_principal,
@@ -588,6 +588,7 @@ generate_single_loan_cash_flow <- function(loan_id,
     # Store cash flow with pre-calculated date
     cash_flows[[i]] <- tibble::tibble(
       LOAN_ID = loan_id,
+      eff_date = start_date,
       rate = rate,
       tier = tier,
       month = i,
