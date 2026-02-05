@@ -6,9 +6,9 @@
 #'
 #' @param loan_cash_flows Data frame. Output from \code{calculate_cash_flows()}
 #'   containing projected loan cash flows with required columns: LOAN_ID,
-#'   current_interest_rate, eff_date, date, total_payment, investor_total.
+#'   rate, eff_date, date, total_payment, investor_total.
 #' @param discount_rate Numeric or NULL. Discount rate for present value
-#'   calculations. If NULL (default), uses each loan's current_interest_rate
+#'   calculations. If NULL (default), uses each loan's rate
 #'   from the loan_cash_flows data. If a scalar (e.g., 0.05 for 5%), applies
 #'   that rate uniformly across all loans. Duration is calculated using an
 #'   explicitly chosen discount rate (loan coupon, portfolio yield, or market rate).
@@ -81,7 +81,7 @@ calculate_duration <- function(loan_cash_flows,
     stop("loan_cash_flows must be a data frame")
   }
 
-  required_cols <- c("LOAN_ID", "current_interest_rate", "eff_date",
+  required_cols <- c("LOAN_ID", "rate", "eff_date",
                      "date", "total_payment", "investor_total")
   missing_cols <- setdiff(required_cols, names(loan_cash_flows))
   if (length(missing_cols) > 0) {
@@ -119,7 +119,7 @@ calculate_duration <- function(loan_cash_flows,
   # Remove rows with missing critical data
   duration_data <- loan_cash_flows %>%
     filter(!is.na(LOAN_ID),
-           !is.na(current_interest_rate),
+           !is.na(rate),
            !is.na(eff_date),
            !is.na(date),
            !is.na(.data[[cash_flow_column]])) %>%
@@ -134,9 +134,9 @@ calculate_duration <- function(loan_cash_flows,
 
   # Determine discount rate to use for each loan
   if (is.null(discount_rate)) {
-    # Use each loan's current_interest_rate
+    # Use each loan's rate
     duration_data <- duration_data %>%
-      mutate(discount_rate_used = current_interest_rate)
+      mutate(discount_rate_used = rate)
   } else {
     # Use user-specified scalar rate
     duration_data <- duration_data %>%

@@ -3,6 +3,7 @@
 export(calculate_cash_flows)
 export(calculate_duration)
 export(calculate_prepay_speed)
+export(calculate_wal)
 import(dplyr)
 import(lubridate)
 importFrom(dplyr,across)

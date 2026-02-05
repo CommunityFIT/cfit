@@ -1,3 +1,15 @@
+# cfit 0.2.3
+
+## New Features
+
+* Added `calculate_duration()` - Calculate Macaulay duration, modified duration, and optional analytical convexity for loan portfolios
+* Added `calculate_wal()` - Calculate weighted average life (WAL) for loan portfolios based on principal cash flows
+
+## Documentation
+
+* Comprehensive documentation for duration and WAL calculations
+* Examples demonstrating usage with different cash flow and principal columns
+
 # cfit 0.2.2
 
 ## Bug Fixes
