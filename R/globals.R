@@ -1,7 +1,7 @@
 # Global variables for R CMD check
 utils::globalVariables(c(
   "LOAN_ID",
-  "current_interest_rate",
+  "rate",
   "eff_date",
   "date",
   "month",

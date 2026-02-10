@@ -11,7 +11,7 @@ create_test_cash_flows <- function() {
     eff_date = as.Date("2024-01-01"),
     date = rep(seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12), 2),
     month = rep(1:12, 2),
-    current_interest_rate = rep(c(0.06, 0.05), each = 12),
+    rate = rep(c(0.06, 0.05), each = 12),
     total_payment = rep(c(1000, 1500), each = 12),
     investor_total = rep(c(950, 1425), each = 12)
   )
@@ -113,15 +113,22 @@ test_that("calculate_duration errors when required columns are missing", {
     "loan_cash_flows is missing required columns: month"
   )
 
+  # Remove rate
+  cash_flows_no_rate <- cash_flows %>% select(-rate)
+  expect_error(
+    calculate_duration(cash_flows_no_rate),
+    "loan_cash_flows is missing required columns: rate"
+  )
+
   # Remove multiple columns
-  cash_flows_incomplete <- cash_flows %>% select(-current_interest_rate, -total_payment)
+  cash_flows_incomplete <- cash_flows %>% select(-rate, -total_payment)
   expect_error(
     calculate_duration(cash_flows_incomplete),
     "loan_cash_flows is missing required columns"
   )
   expect_error(
     calculate_duration(cash_flows_incomplete),
-    "current_interest_rate"
+    "rate"
   )
   expect_error(
     calculate_duration(cash_flows_incomplete),
@@ -263,9 +270,12 @@ test_that("calculate_duration errors when portfolio PV is zero", {
   cash_flows$total_payment <- 0
   cash_flows$investor_total <- 0
 
-  expect_error(
-    calculate_duration(cash_flows),
-    "Portfolio present value is zero"
+  expect_warning(
+    expect_error(
+      calculate_duration(cash_flows),
+      "No loans remaining after filtering zero PV"
+    ),
+    "Removed 2 loan\\(s\\) with zero present value"
   )
 })
 
@@ -306,7 +316,7 @@ test_that("calculate_duration works with single loan", {
     eff_date = as.Date("2024-01-01"),
     date = seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12),
     month = 1:12,
-    current_interest_rate = 0.06,
+    rate = 0.06,
     total_payment = 1000,
     investor_total = 950
   )
@@ -331,7 +341,7 @@ test_that("calculate_duration handles larger portfolios efficiently", {
     eff_date = as.Date("2024-01-01"),
     date = rep(seq.Date(as.Date("2024-02-01"), by = "month", length.out = n_months), n_loans),
     month = rep(1:n_months, n_loans),
-    current_interest_rate = rep(runif(n_loans, 0.04, 0.08), each = n_months),
+    rate = rep(runif(n_loans, 0.04, 0.08), each = n_months),
     total_payment = rep(runif(n_loans, 500, 2000), each = n_months),
     investor_total = rep(runif(n_loans, 450, 1900), each = n_months)
   )
@@ -397,7 +407,7 @@ test_that("calculate_duration handles heterogeneous loan rates correctly", {
     eff_date = as.Date("2024-01-01"),
     date = rep(seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12), 3),
     month = rep(1:12, 3),
-    current_interest_rate = rep(c(0.03, 0.06, 0.09), each = 12),
+    rate = rep(c(0.03, 0.06, 0.09), each = 12),
     total_payment = rep(c(1000, 1000, 1000), each = 12),
     investor_total = rep(c(950, 950, 950), each = 12)
   )
@@ -417,7 +427,7 @@ test_that("calculate_duration correctly uses month column for time calculation",
     eff_date = as.Date("2024-01-01"),
     date = as.Date(c("2024-02-01", "2024-03-01", "2024-04-01")),
     month = c(1, 2, 3),
-    current_interest_rate = 0.06,
+    rate = 0.06,
     total_payment = c(100, 100, 100),
     investor_total = c(95, 95, 95)
   )
@@ -462,3 +472,39 @@ test_that("monthly compounding produces different results than annual", {
   result_high_rate <- calculate_duration(cash_flows, discount_rate = 0.12)
   expect_true(result_high_rate$portfolio_pv < result_monthly$portfolio_pv)
 })
+
+# Test 26: Validate month >= 1 ----
+test_that("calculate_duration errors when month < 1", {
+  cash_flows <- create_test_cash_flows()
+
+  # Set some months to 0
+  cash_flows$month[1:3] <- 0
+
+  expect_error(
+    calculate_duration(cash_flows),
+    "month column contains values less than 1"
+  )
+
+  # Set some months to negative
+  cash_flows <- create_test_cash_flows()
+  cash_flows$month[1:3] <- -1
+
+  expect_error(
+    calculate_duration(cash_flows),
+    "month column contains values less than 1"
+  )
+})
+
+# Test 27: Validate month is integer ----
+test_that("calculate_duration errors when month is not integer", {
+  cash_flows <- create_test_cash_flows()
+
+  # Set some months to decimals
+  cash_flows$month[1:3] <- 1.5
+
+  expect_error(
+    calculate_duration(cash_flows),
+    "month column contains non-integer values"
+  )
+})
+

@@ -108,6 +108,20 @@ calculate_wal <- function(loan_cash_flows,
     stop("No valid rows remaining after removing missing values in required columns")
   }
 
+  # Validate date conversion succeeded ----
+  if (any(is.na(wal_data$eff_date)) || any(is.na(wal_data$date))) {
+    stop("Some date values could not be converted to Date format. Check eff_date and date columns.")
+  }
+
+  # Validate month column ----
+  if (any(wal_data$month < 1, na.rm = TRUE)) {
+    stop("month column contains values less than 1. Month must be >= 1 (month = 1 corresponds to time 0)")
+  }
+
+  if (any(wal_data$month != floor(wal_data$month), na.rm = TRUE)) {
+    stop("month column contains non-integer values. Month must be an integer >= 1")
+  }
+
   # Calculate time periods using month column ----
   wal_data <- wal_data %>%
     mutate(

@@ -14,15 +14,14 @@ calculate_duration(
 \arguments{
 \item{loan_cash_flows}{Data frame. Output from \code{calculate_cash_flows()}
 containing projected loan cash flows with required columns: LOAN_ID,
-current_interest_rate, eff_date, date, month, total_payment, investor_total.}
+rate, eff_date, date, month, total_payment, investor_total.}
 
 \item{discount_rate}{Numeric or NULL. Annual discount rate for present value
 calculations (e.g., 0.06 for 6\% per year). If NULL (default), uses each
-loan's current_interest_rate from the loan_cash_flows data. If a scalar,
-applies that rate uniformly across all loans. When discount_rate is NULL,
-present values are computed using loan-level rates, and the portfolio
-discount rate used in the modified duration adjustment is the PV-weighted
-average loan rate.}
+loan's rate from the loan_cash_flows data. If a scalar, applies that rate
+uniformly across all loans. When discount_rate is NULL, present values are
+computed using loan-level rates, and the portfolio discount rate used in
+the modified duration adjustment is the PV-weighted average loan rate.}
 
 \item{cash_flow_column}{Character. Column name for cash flows to discount.
 Options:

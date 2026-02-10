@@ -6,14 +6,13 @@
 #'
 #' @param loan_cash_flows Data frame. Output from \code{calculate_cash_flows()}
 #'   containing projected loan cash flows with required columns: LOAN_ID,
-#'   current_interest_rate, eff_date, date, month, total_payment, investor_total.
+#'   rate, eff_date, date, month, total_payment, investor_total.
 #' @param discount_rate Numeric or NULL. Annual discount rate for present value
 #'   calculations (e.g., 0.06 for 6% per year). If NULL (default), uses each
-#'   loan's current_interest_rate from the loan_cash_flows data. If a scalar,
-#'   applies that rate uniformly across all loans. When discount_rate is NULL,
-#'   present values are computed using loan-level rates, and the portfolio
-#'   discount rate used in the modified duration adjustment is the PV-weighted
-#'   average loan rate.
+#'   loan's rate from the loan_cash_flows data. If a scalar, applies that rate
+#'   uniformly across all loans. When discount_rate is NULL, present values are
+#'   computed using loan-level rates, and the portfolio discount rate used in
+#'   the modified duration adjustment is the PV-weighted average loan rate.
 #' @param cash_flow_column Character. Column name for cash flows to discount.
 #'   Options:
 #'   \itemize{
@@ -91,7 +90,7 @@ calculate_duration <- function(loan_cash_flows,
     stop("loan_cash_flows must be a data frame")
   }
 
-  required_cols <- c("LOAN_ID", "current_interest_rate", "eff_date",
+  required_cols <- c("LOAN_ID", "rate", "eff_date",
                      "date", "month", "total_payment", "investor_total")
   missing_cols <- setdiff(required_cols, names(loan_cash_flows))
   if (length(missing_cols) > 0) {
@@ -129,7 +128,7 @@ calculate_duration <- function(loan_cash_flows,
   # Remove rows with missing critical data
   duration_data <- loan_cash_flows %>%
     filter(!is.na(LOAN_ID),
-           !is.na(current_interest_rate),
+           !is.na(rate),
            !is.na(eff_date),
            !is.na(date),
            !is.na(month),
@@ -143,11 +142,25 @@ calculate_duration <- function(loan_cash_flows,
     stop("No valid rows remaining after removing missing values in required columns")
   }
 
+  # Validate date conversion succeeded ----
+  if (any(is.na(duration_data$eff_date)) || any(is.na(duration_data$date))) {
+    stop("Some date values could not be converted to Date format. Check eff_date and date columns.")
+  }
+
+  # Validate month column ----
+  if (any(duration_data$month < 1, na.rm = TRUE)) {
+    stop("month column contains values less than 1. Month must be >= 1 (month = 1 corresponds to time 0)")
+  }
+
+  if (any(duration_data$month != floor(duration_data$month), na.rm = TRUE)) {
+    stop("month column contains non-integer values. Month must be an integer >= 1")
+  }
+
   # Determine discount rate to use for each loan
   if (is.null(discount_rate)) {
-    # Use each loan's current_interest_rate
+    # Use each loan's rate
     duration_data <- duration_data %>%
-      mutate(discount_rate_used = current_interest_rate)
+      mutate(discount_rate_used = rate)
   } else {
     # Use user-specified scalar rate
     duration_data <- duration_data %>%
@@ -188,6 +201,19 @@ calculate_duration <- function(loan_cash_flows,
       avg_discount_rate = mean(discount_rate_used, na.rm = TRUE),
       .groups = "drop"
     )
+
+  # Filter out loans with zero PV and warn if any removed ----
+  zero_pv_loans <- loan_level %>% filter(loan_pv == 0)
+  if (nrow(zero_pv_loans) > 0) {
+    warning("Removed ", nrow(zero_pv_loans),
+            " loan(s) with zero present value from duration calculation")
+  }
+  loan_level <- loan_level %>% filter(loan_pv > 0)
+
+  # Check for remaining loans
+  if (nrow(loan_level) == 0) {
+    stop("No loans remaining after filtering zero PV. Check cash flows and discount rates.")
+  }
 
   # Calculate portfolio-level metrics ----
   portfolio_pv <- sum(loan_level$loan_pv, na.rm = TRUE)
