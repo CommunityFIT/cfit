@@ -6,12 +6,14 @@
 #'
 #' @param loan_cash_flows Data frame. Output from \code{calculate_cash_flows()}
 #'   containing projected loan cash flows with required columns: LOAN_ID,
-#'   rate, eff_date, date, total_payment, investor_total.
-#' @param discount_rate Numeric or NULL. Discount rate for present value
-#'   calculations. If NULL (default), uses each loan's rate
-#'   from the loan_cash_flows data. If a scalar (e.g., 0.05 for 5%), applies
-#'   that rate uniformly across all loans. Duration is calculated using an
-#'   explicitly chosen discount rate (loan coupon, portfolio yield, or market rate).
+#'   current_interest_rate, eff_date, date, month, total_payment, investor_total.
+#' @param discount_rate Numeric or NULL. Annual discount rate for present value
+#'   calculations (e.g., 0.06 for 6% per year). If NULL (default), uses each
+#'   loan's current_interest_rate from the loan_cash_flows data. If a scalar,
+#'   applies that rate uniformly across all loans. When discount_rate is NULL,
+#'   present values are computed using loan-level rates, and the portfolio
+#'   discount rate used in the modified duration adjustment is the PV-weighted
+#'   average loan rate.
 #' @param cash_flow_column Character. Column name for cash flows to discount.
 #'   Options:
 #'   \itemize{
@@ -39,16 +41,23 @@
 #'   }
 #'
 #' @details
+#' All calculations use monthly compounding. Present values are computed as:
+#' PV_t = CF_t / (1 + y/12)^t, where y is the annual discount rate and t is
+#' time in months from eff_date. The month column is treated as the projection
+#' index, where month = 1 corresponds to time 0 (the effective date). Timing
+#' calculations use t = (month - 1) / 12 for conversion to years.
+#'
 #' Duration measures the weighted average time until cash flows are received,
 #' expressed in years. Modified duration approximates the percentage change in
-#' present value for a 1% change in interest rates.
+#' present value for a 1% change in interest rates, assuming monthly compounding.
 #'
 #' The function calculates:
 #' \itemize{
 #'   \item Macaulay Duration = Σ(t × PV_t) / Σ(PV_t), where t is time in years
 #'   \item Modified Duration = Macaulay Duration / (1 + y/12), where y is the
 #'     discount rate and 12 represents monthly compounding
-#'   \item Analytical Convexity = Σ(PV_t × t × (t + 1/12)) / (PV × (1 + y/12)^2)
+#'   \item Analytical Convexity = Σ(PV_t × t × (t + 1/12)) / (PV × (1 + y/12)^2),
+#'     where t is in years and the formula reflects monthly compounding
 #' }
 #'
 #' When discount_rate is NULL, the function uses a weighted average of loan rates
@@ -70,6 +79,7 @@
 #' )
 #' }
 #'
+#' @importFrom stats weighted.mean
 #' @export
 calculate_duration <- function(loan_cash_flows,
                                discount_rate = NULL,
@@ -81,8 +91,8 @@ calculate_duration <- function(loan_cash_flows,
     stop("loan_cash_flows must be a data frame")
   }
 
-  required_cols <- c("LOAN_ID", "rate", "eff_date",
-                     "date", "total_payment", "investor_total")
+  required_cols <- c("LOAN_ID", "current_interest_rate", "eff_date",
+                     "date", "month", "total_payment", "investor_total")
   missing_cols <- setdiff(required_cols, names(loan_cash_flows))
   if (length(missing_cols) > 0) {
     stop("loan_cash_flows is missing required columns: ",
@@ -97,8 +107,8 @@ calculate_duration <- function(loan_cash_flows,
     if (!is.numeric(discount_rate) || length(discount_rate) != 1) {
       stop("discount_rate must be NULL or a single numeric value")
     }
-    if (discount_rate <= 0) {
-      stop("discount_rate must be positive")
+    if (discount_rate < 0) {
+      stop("discount_rate must be non-negative")
     }
   }
 
@@ -119,9 +129,10 @@ calculate_duration <- function(loan_cash_flows,
   # Remove rows with missing critical data
   duration_data <- loan_cash_flows %>%
     filter(!is.na(LOAN_ID),
-           !is.na(rate),
+           !is.na(current_interest_rate),
            !is.na(eff_date),
            !is.na(date),
+           !is.na(month),
            !is.na(.data[[cash_flow_column]])) %>%
     mutate(
       eff_date = as.Date(eff_date),
@@ -134,23 +145,23 @@ calculate_duration <- function(loan_cash_flows,
 
   # Determine discount rate to use for each loan
   if (is.null(discount_rate)) {
-    # Use each loan's rate
+    # Use each loan's current_interest_rate
     duration_data <- duration_data %>%
-      mutate(discount_rate_used = rate)
+      mutate(discount_rate_used = current_interest_rate)
   } else {
     # Use user-specified scalar rate
     duration_data <- duration_data %>%
       mutate(discount_rate_used = discount_rate)
   }
 
-  # Calculate time periods and present values ----
+  # Calculate time periods using month column and present values with monthly compounding ----
   duration_data <- duration_data %>%
     mutate(
-      t_months = interval(eff_date, date) %/% months(1),
+      t_months = month - 1,
       t_years = t_months / 12,
 
-      # Present value calculation
-      pv = .data[[cash_flow_column]] / (1 + discount_rate_used)^t_years,
+      # Present value calculation using monthly compounding
+      pv = .data[[cash_flow_column]] / (1 + discount_rate_used / 12)^t_months,
       pv_weighted_time = t_years * pv
     )
 
@@ -158,7 +169,7 @@ calculate_duration <- function(loan_cash_flows,
   if (include_convexity) {
     duration_data <- duration_data %>%
       mutate(
-        # Convexity formula: PV * t * (t + 1/12) for monthly cash flows
+        # Convexity formula: PV * t * (t + 1/12) for monthly cash flows, expressed in years
         convexity_term = pv * t_years * (t_years + 1/12)
       )
   }
@@ -200,7 +211,7 @@ calculate_duration <- function(loan_cash_flows,
     portfolio_discount_rate <- discount_rate
   }
 
-  # Modified duration = Macaulay / (1 + y/m) where m = 12 for monthly compounding
+  # Modified duration = Macaulay / (1 + y/12) where y is annual rate, 12 for monthly compounding
   modified_duration <- macaulay_duration / (1 + portfolio_discount_rate / 12)
 
   # Build output ----
@@ -212,7 +223,7 @@ calculate_duration <- function(loan_cash_flows,
 
   # Add convexity if requested
   if (include_convexity) {
-    # Portfolio convexity calculation
+    # Portfolio convexity calculation with monthly compounding
     portfolio_convexity <- sum(loan_level$loan_convexity * loan_level$loan_pv,
                                na.rm = TRUE) /
       (portfolio_pv * (1 + portfolio_discount_rate / 12)^2)

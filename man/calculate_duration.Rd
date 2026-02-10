@@ -14,13 +14,15 @@ calculate_duration(
 \arguments{
 \item{loan_cash_flows}{Data frame. Output from \code{calculate_cash_flows()}
 containing projected loan cash flows with required columns: LOAN_ID,
-rate, eff_date, date, total_payment, investor_total.}
+current_interest_rate, eff_date, date, month, total_payment, investor_total.}
 
-\item{discount_rate}{Numeric or NULL. Discount rate for present value
-calculations. If NULL (default), uses each loan's rate
-from the loan_cash_flows data. If a scalar (e.g., 0.05 for 5\%), applies
-that rate uniformly across all loans. Duration is calculated using an
-explicitly chosen discount rate (loan coupon, portfolio yield, or market rate).}
+\item{discount_rate}{Numeric or NULL. Annual discount rate for present value
+calculations (e.g., 0.06 for 6\% per year). If NULL (default), uses each
+loan's current_interest_rate from the loan_cash_flows data. If a scalar,
+applies that rate uniformly across all loans. When discount_rate is NULL,
+present values are computed using loan-level rates, and the portfolio
+discount rate used in the modified duration adjustment is the PV-weighted
+average loan rate.}
 
 \item{cash_flow_column}{Character. Column name for cash flows to discount.
 Options:
@@ -56,16 +58,23 @@ convexity for a loan portfolio based on projected cash flows from
 \code{calculate_cash_flows()}.
 }
 \details{
+All calculations use monthly compounding. Present values are computed as:
+PV_t = CF_t / (1 + y/12)^t, where y is the annual discount rate and t is
+time in months from eff_date. The month column is treated as the projection
+index, where month = 1 corresponds to time 0 (the effective date). Timing
+calculations use t = (month - 1) / 12 for conversion to years.
+
 Duration measures the weighted average time until cash flows are received,
 expressed in years. Modified duration approximates the percentage change in
-present value for a 1\% change in interest rates.
+present value for a 1\% change in interest rates, assuming monthly compounding.
 
 The function calculates:
 \itemize{
 \item Macaulay Duration = Σ(t × PV_t) / Σ(PV_t), where t is time in years
 \item Modified Duration = Macaulay Duration / (1 + y/12), where y is the
 discount rate and 12 represents monthly compounding
-\item Analytical Convexity = Σ(PV_t × t × (t + 1/12)) / (PV × (1 + y/12)^2)
+\item Analytical Convexity = Σ(PV_t × t × (t + 1/12)) / (PV × (1 + y/12)^2),
+where t is in years and the formula reflects monthly compounding
 }
 
 When discount_rate is NULL, the function uses a weighted average of loan rates

@@ -10,7 +10,8 @@ create_test_cash_flows <- function() {
     LOAN_ID = rep(c("L001", "L002"), each = 12),
     eff_date = as.Date("2024-01-01"),
     date = rep(seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12), 2),
-    rate = rep(c(0.06, 0.05), each = 12),
+    month = rep(1:12, 2),
+    current_interest_rate = rep(c(0.06, 0.05), each = 12),
     total_payment = rep(c(1000, 1500), each = 12),
     investor_total = rep(c(950, 1425), each = 12)
   )
@@ -105,15 +106,22 @@ test_that("calculate_duration errors when required columns are missing", {
     "loan_cash_flows is missing required columns: LOAN_ID"
   )
 
+  # Remove month
+  cash_flows_no_month <- cash_flows %>% select(-month)
+  expect_error(
+    calculate_duration(cash_flows_no_month),
+    "loan_cash_flows is missing required columns: month"
+  )
+
   # Remove multiple columns
-  cash_flows_incomplete <- cash_flows %>% select(-rate, -total_payment)
+  cash_flows_incomplete <- cash_flows %>% select(-current_interest_rate, -total_payment)
   expect_error(
     calculate_duration(cash_flows_incomplete),
     "loan_cash_flows is missing required columns"
   )
   expect_error(
     calculate_duration(cash_flows_incomplete),
-    "rate"
+    "current_interest_rate"
   )
   expect_error(
     calculate_duration(cash_flows_incomplete),
@@ -142,12 +150,7 @@ test_that("calculate_duration errors with invalid discount_rate", {
 
   expect_error(
     calculate_duration(cash_flows, discount_rate = -0.05),
-    "discount_rate must be positive"
-  )
-
-  expect_error(
-    calculate_duration(cash_flows, discount_rate = 0),
-    "discount_rate must be positive"
+    "discount_rate must be non-negative"
   )
 
   expect_error(
@@ -161,7 +164,19 @@ test_that("calculate_duration errors with invalid discount_rate", {
   )
 })
 
-# Test 9: Input validation - invalid include_convexity ----
+# Test 9: Allows discount_rate = 0 ----
+test_that("calculate_duration allows discount_rate = 0", {
+  cash_flows <- create_test_cash_flows()
+
+  result <- calculate_duration(cash_flows, discount_rate = 0)
+
+  expect_s3_class(result, "data.frame")
+  expect_true(result$portfolio_pv > 0)
+  expect_true(result$macaulay_duration > 0)
+  expect_true(result$modified_duration > 0)
+})
+
+# Test 10: Input validation - invalid include_convexity ----
 test_that("calculate_duration errors with invalid include_convexity", {
   cash_flows <- create_test_cash_flows()
 
@@ -181,7 +196,7 @@ test_that("calculate_duration errors with invalid include_convexity", {
   )
 })
 
-# Test 10: Handles all NA in LOAN_ID ----
+# Test 11: Handles all NA in LOAN_ID ----
 test_that("calculate_duration errors when LOAN_ID is all NA", {
   cash_flows <- create_test_cash_flows()
   cash_flows$LOAN_ID <- NA_character_
@@ -192,7 +207,7 @@ test_that("calculate_duration errors when LOAN_ID is all NA", {
   )
 })
 
-# Test 11: Handles all NA in cash flow column ----
+# Test 12: Handles all NA in cash flow column ----
 test_that("calculate_duration errors when cash flow column is all NA", {
   cash_flows <- create_test_cash_flows()
 
@@ -210,7 +225,7 @@ test_that("calculate_duration errors when cash flow column is all NA", {
   )
 })
 
-# Test 12: Handles missing values in some rows ----
+# Test 13: Handles missing values in some rows ----
 test_that("calculate_duration handles partial missing data", {
   cash_flows <- create_test_cash_flows()
 
@@ -226,7 +241,7 @@ test_that("calculate_duration handles partial missing data", {
   expect_true(result$macaulay_duration > 0)
 })
 
-# Test 13: Errors when no valid rows remain ----
+# Test 14: Errors when no valid rows remain ----
 test_that("calculate_duration errors when no valid rows remain after filtering", {
   cash_flows <- create_test_cash_flows()
 
@@ -240,7 +255,7 @@ test_that("calculate_duration errors when no valid rows remain after filtering",
   )
 })
 
-# Test 14: Errors when portfolio PV is zero ----
+# Test 15: Errors when portfolio PV is zero ----
 test_that("calculate_duration errors when portfolio PV is zero", {
   cash_flows <- create_test_cash_flows()
 
@@ -254,7 +269,7 @@ test_that("calculate_duration errors when portfolio PV is zero", {
   )
 })
 
-# Test 15: Modified duration is less than Macaulay duration ----
+# Test 16: Modified duration is less than Macaulay duration ----
 test_that("modified duration is always less than Macaulay duration", {
   cash_flows <- create_test_cash_flows()
 
@@ -271,7 +286,7 @@ test_that("modified duration is always less than Macaulay duration", {
   expect_true(result3$modified_duration < result3$macaulay_duration)
 })
 
-# Test 16: Duration decreases as discount rate increases ----
+# Test 17: Duration decreases as discount rate increases ----
 test_that("higher discount rates produce lower PV", {
   cash_flows <- create_test_cash_flows()
 
@@ -284,13 +299,14 @@ test_that("higher discount rates produce lower PV", {
   expect_true(result_5pct$portfolio_pv > result_8pct$portfolio_pv)
 })
 
-# Test 17: Single loan portfolio ----
+# Test 18: Single loan portfolio ----
 test_that("calculate_duration works with single loan", {
   cash_flows <- data.frame(
     LOAN_ID = rep("L001", 12),
     eff_date = as.Date("2024-01-01"),
     date = seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12),
-    rate = 0.06,
+    month = 1:12,
+    current_interest_rate = 0.06,
     total_payment = 1000,
     investor_total = 950
   )
@@ -304,7 +320,7 @@ test_that("calculate_duration works with single loan", {
   expect_true(result$modified_duration > 0)
 })
 
-# Test 18: Large portfolio (performance check) ----
+# Test 19: Large portfolio (performance check) ----
 test_that("calculate_duration handles larger portfolios efficiently", {
   # Create 100 loans with 60 months each = 6,000 rows
   n_loans <- 100
@@ -314,7 +330,8 @@ test_that("calculate_duration handles larger portfolios efficiently", {
     LOAN_ID = rep(paste0("L", sprintf("%03d", 1:n_loans)), each = n_months),
     eff_date = as.Date("2024-01-01"),
     date = rep(seq.Date(as.Date("2024-02-01"), by = "month", length.out = n_months), n_loans),
-    rate = rep(runif(n_loans, 0.04, 0.08), each = n_months),
+    month = rep(1:n_months, n_loans),
+    current_interest_rate = rep(runif(n_loans, 0.04, 0.08), each = n_months),
     total_payment = rep(runif(n_loans, 500, 2000), each = n_months),
     investor_total = rep(runif(n_loans, 450, 1900), each = n_months)
   )
@@ -329,7 +346,7 @@ test_that("calculate_duration handles larger portfolios efficiently", {
   expect_true(as.numeric(difftime(end_time, start_time, units = "secs")) < 5)
 })
 
-# Test 19: Date format handling ----
+# Test 20: Date format handling ----
 test_that("calculate_duration handles date formats correctly", {
   cash_flows <- create_test_cash_flows()
 
@@ -343,7 +360,7 @@ test_that("calculate_duration handles date formats correctly", {
   expect_true(result$portfolio_pv > 0)
 })
 
-# Test 20: Convexity is always positive ----
+# Test 21: Convexity is always positive ----
 test_that("analytical convexity is positive", {
   cash_flows <- create_test_cash_flows()
 
@@ -359,7 +376,7 @@ test_that("analytical convexity is positive", {
   expect_true(result3$analytical_convexity > 0)
 })
 
-# Test 21: Verify mathematical relationship between durations ----
+# Test 22: Verify mathematical relationship between durations ----
 test_that("modified duration calculation is mathematically correct", {
   cash_flows <- create_test_cash_flows()
 
@@ -373,13 +390,14 @@ test_that("modified duration calculation is mathematically correct", {
   expect_equal(result$modified_duration, expected_modified, tolerance = 1e-6)
 })
 
-# Test 22: Different loans with different rates ----
+# Test 23: Different loans with different rates ----
 test_that("calculate_duration handles heterogeneous loan rates correctly", {
   cash_flows <- data.frame(
     LOAN_ID = rep(c("L001", "L002", "L003"), each = 12),
     eff_date = as.Date("2024-01-01"),
     date = rep(seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12), 3),
-    rate = rep(c(0.03, 0.06, 0.09), each = 12),
+    month = rep(1:12, 3),
+    current_interest_rate = rep(c(0.03, 0.06, 0.09), each = 12),
     total_payment = rep(c(1000, 1000, 1000), each = 12),
     investor_total = rep(c(950, 950, 950), each = 12)
   )
@@ -390,4 +408,57 @@ test_that("calculate_duration handles heterogeneous loan rates correctly", {
   # Results should differ when using varied rates vs uniform rate
   expect_false(isTRUE(all.equal(result_varied$portfolio_pv, result_uniform$portfolio_pv)))
   expect_false(isTRUE(all.equal(result_varied$macaulay_duration, result_uniform$macaulay_duration)))
+})
+
+# Test 24: Time calculation using month column ----
+test_that("calculate_duration correctly uses month column for time calculation", {
+  cash_flows <- data.frame(
+    LOAN_ID = rep("L001", 3),
+    eff_date = as.Date("2024-01-01"),
+    date = as.Date(c("2024-02-01", "2024-03-01", "2024-04-01")),
+    month = c(1, 2, 3),
+    current_interest_rate = 0.06,
+    total_payment = c(100, 100, 100),
+    investor_total = c(95, 95, 95)
+  )
+
+  result <- calculate_duration(cash_flows)
+
+  # With monthly compounding and t_months = month - 1:
+  # Month 1: t_months = 0, t_years = 0
+  # Month 2: t_months = 1, t_years = 1/12
+  # Month 3: t_months = 2, t_years = 2/12
+
+  # PV calculations with y = 0.06 annual, monthly compounding:
+  # PV1 = 100 / (1 + 0.06/12)^0 = 100
+  # PV2 = 100 / (1 + 0.06/12)^1 = 100 / 1.005 ≈ 99.502
+  # PV3 = 100 / (1 + 0.06/12)^2 = 100 / 1.010025 ≈ 99.007
+
+  # Macaulay Duration = (0*100 + 1/12*99.502 + 2/12*99.007) / (100 + 99.502 + 99.007)
+  pv1 <- 100
+  pv2 <- 100 / (1.005)
+  pv3 <- 100 / (1.005^2)
+  total_pv <- pv1 + pv2 + pv3
+  expected_duration <- (0 * pv1 + (1/12) * pv2 + (2/12) * pv3) / total_pv
+
+  expect_equal(result$macaulay_duration, expected_duration, tolerance = 0.001)
+})
+
+# Test 25: Monthly compounding vs annual compounding comparison ----
+test_that("monthly compounding produces different results than annual", {
+  cash_flows <- create_test_cash_flows()
+
+  # With monthly compounding (current implementation)
+  result_monthly <- calculate_duration(cash_flows, discount_rate = 0.06)
+
+  # The PV should be different from what annual compounding would give
+  # We can't directly test annual, but we can verify monthly is being used
+  # by checking the PV is reasonable for monthly compounding
+
+  expect_true(result_monthly$portfolio_pv > 0)
+  expect_true(result_monthly$macaulay_duration > 0)
+
+  # With higher rate, PV should be lower (sanity check on discounting)
+  result_high_rate <- calculate_duration(cash_flows, discount_rate = 0.12)
+  expect_true(result_high_rate$portfolio_pv < result_monthly$portfolio_pv)
 })

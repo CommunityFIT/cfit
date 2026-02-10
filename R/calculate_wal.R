@@ -7,7 +7,7 @@
 #'
 #' @param loan_cash_flows Data frame. Output from \code{calculate_cash_flows()}
 #'   containing projected loan cash flows with required columns: LOAN_ID,
-#'   eff_date, date, total_principal, investor_principal.
+#'   eff_date, date, month, total_principal, investor_principal.
 #' @param principal_column Character. Column name for principal cash flows to use.
 #'   Options:
 #'   \itemize{
@@ -27,6 +27,11 @@
 #' interest payments or apply discounting. Unlike duration, WAL is not sensitive
 #' to interest rates—it purely reflects the timing and amount of principal
 #' repayment.
+#'
+#' Time measurement: The month column is treated as the projection index, where
+#' month = 1 corresponds to time 0 (the effective date). Timing calculations use
+#' t = (month - 1) / 12. This means month = 1 has t = 0 years, month = 2 has
+#' t = 1/12 years (one month from eff_date), and so on.
 #'
 #' The function calculates:
 #' \itemize{
@@ -55,6 +60,7 @@
 #' )
 #' }
 #'
+#' @importFrom stats weighted.mean
 #' @export
 calculate_wal <- function(loan_cash_flows,
                           principal_column = "total_principal") {
@@ -64,7 +70,8 @@ calculate_wal <- function(loan_cash_flows,
     stop("loan_cash_flows must be a data frame")
   }
 
-  required_cols <- c("LOAN_ID", "eff_date", "date", "total_principal", "investor_principal")
+  required_cols <- c("LOAN_ID", "eff_date", "date", "month",
+                     "total_principal", "investor_principal")
   missing_cols <- setdiff(required_cols, names(loan_cash_flows))
   if (length(missing_cols) > 0) {
     stop("loan_cash_flows is missing required columns: ",
@@ -90,6 +97,7 @@ calculate_wal <- function(loan_cash_flows,
     filter(!is.na(LOAN_ID),
            !is.na(eff_date),
            !is.na(date),
+           !is.na(month),
            !is.na(.data[[principal_column]])) %>%
     mutate(
       eff_date = as.Date(eff_date),
@@ -100,10 +108,10 @@ calculate_wal <- function(loan_cash_flows,
     stop("No valid rows remaining after removing missing values in required columns")
   }
 
-  # Calculate time periods ----
+  # Calculate time periods using month column ----
   wal_data <- wal_data %>%
     mutate(
-      t_months = interval(eff_date, date) %/% months(1),
+      t_months = month - 1,
       t_years = t_months / 12,
       weighted_principal = t_years * .data[[principal_column]]
     )
@@ -112,16 +120,30 @@ calculate_wal <- function(loan_cash_flows,
   loan_level <- wal_data %>%
     group_by(LOAN_ID) %>%
     summarise(
-      total_principal = sum(.data[[principal_column]], na.rm = TRUE),
+      principal_sum = sum(.data[[principal_column]], na.rm = TRUE),
       weighted_principal_sum = sum(weighted_principal, na.rm = TRUE),
       .groups = "drop"
     ) %>%
     mutate(
-      loan_wal = weighted_principal_sum / total_principal
+      loan_wal = weighted_principal_sum / principal_sum
     )
 
-  # Check for zero total principal
-  total_principal_sum <- sum(loan_level$total_principal, na.rm = TRUE)
+  # Filter out loans with zero principal and warn if any removed ----
+  zero_principal_loans <- loan_level %>% filter(principal_sum == 0)
+  if (nrow(zero_principal_loans) > 0) {
+    warning("Removed ", nrow(zero_principal_loans),
+            " loan(s) with zero ", principal_column, " from WAL calculation")
+  }
+  loan_level <- loan_level %>% filter(principal_sum > 0)
+
+  # Check for remaining loans
+  if (nrow(loan_level) == 0) {
+    stop("No loans remaining after filtering zero principal. Check principal cash flows in ",
+         principal_column)
+  }
+
+  # Check for total principal sum
+  total_principal_sum <- sum(loan_level$principal_sum, na.rm = TRUE)
 
   if (total_principal_sum == 0) {
     stop("Total principal is zero. Check principal cash flows in ", principal_column)
@@ -129,7 +151,7 @@ calculate_wal <- function(loan_cash_flows,
 
   # Calculate portfolio-level WAL ----
   portfolio_wal <- weighted.mean(loan_level$loan_wal,
-                                 loan_level$total_principal,
+                                 loan_level$principal_sum,
                                  na.rm = TRUE)
 
   # Build output ----

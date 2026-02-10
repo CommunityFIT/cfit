@@ -27,6 +27,10 @@ library(cfit)
 ### Cash Flow Projection
 - `calculate_cash_flows()` – Project monthly loan-level and portfolio-level cash flows under configurable prepayment, credit loss, and fee assumptions
 
+### Duration and WAL Analysis
+- `calculate_duration()` – Calculate Macaulay duration, modified duration, and analytical convexity for interest rate risk measurement
+- `calculate_wal()` – Calculate weighted average life (WAL) for principal repayment timing analysis
+
 ## Examples
 
 ### Prepayment Speed Calculation
@@ -121,7 +125,6 @@ Generate monthly cash flow projections for a loan portfolio and calculate portfo
 **Outputs**
 - Loan-level monthly projected cash flows
 - Optional aggregated monthly totals for portfolio analysis
-  
 ```r
 # Optional: used here only to demonstrate portfolio yield calculation
 # FinCal is not a dependency of cfit
@@ -194,10 +197,90 @@ cash_flows_tiered <- calculate_cash_flows(loan_portfolio_tiered, config_tiered)
 
 For more details, see `?calculate_cash_flows`.
 
+### Duration and WAL Analysis
+
+Measure interest rate risk and principal repayment timing using the projected cash flows.
+
+**Duration Analysis**
+
+Calculate Macaulay duration, modified duration, and analytical convexity:
+```r
+library(cfit)
+
+# Using cash flows from previous example
+cash_flows <- results$loan_cash_flows
+
+# Calculate duration metrics
+duration_results <- calculate_duration(
+  loan_cash_flows = cash_flows,
+  include_convexity = TRUE
+)
+
+print(duration_results)
+# portfolio_pv  macaulay_duration  modified_duration  analytical_convexity
+#     89500.23           2.45               2.44                    7.82
+
+# Interpretation:
+# - Macaulay Duration (2.45 years): Average time to receive cash flows
+# - Modified Duration (2.44): Portfolio value changes ~2.44% for 1% rate change
+# - Convexity (7.82): Measures curvature of price-yield relationship
+```
+
+**Weighted Average Life Analysis**
+
+Calculate WAL to understand principal repayment timing:
+```r
+# Calculate weighted average life
+wal_results <- calculate_wal(
+  loan_cash_flows = cash_flows
+)
+
+print(wal_results)
+# portfolio_wal
+#      2.18
+
+# Interpretation: 
+# Principal is repaid in an average of 2.18 years
+```
+
+**Compare Gross vs Net Metrics**
+
+Analyze both total cash flows and investor's economic interest:
+```r
+# Gross portfolio metrics (full cash flows)
+duration_gross <- calculate_duration(
+  cash_flows,
+  cash_flow_column = "total_payment"
+)
+
+wal_gross <- calculate_wal(
+  cash_flows,
+  principal_column = "total_principal"
+)
+
+# Net investor metrics (after fees and investor share)
+duration_net <- calculate_duration(
+  cash_flows,
+  cash_flow_column = "investor_total"
+)
+
+wal_net <- calculate_wal(
+  cash_flows,
+  principal_column = "investor_principal"
+)
+
+# Compare results
+cat("Gross Duration:", duration_gross$macaulay_duration, "years\n")
+cat("Net Duration:", duration_net$macaulay_duration, "years\n")
+cat("Gross WAL:", wal_gross$portfolio_wal, "years\n")
+cat("Net WAL:", wal_net$portfolio_wal, "years\n")
+```
+
+For more details, see `?calculate_duration` and `?calculate_wal`.
+
 ## Roadmap
 
 Planned functions include:
-- Weighted Average Life (WAL) and duration calculations
 - CECL-oriented cash flow and loss analytics
 
 ## Contributing

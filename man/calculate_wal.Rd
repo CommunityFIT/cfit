@@ -9,7 +9,7 @@ calculate_wal(loan_cash_flows, principal_column = "total_principal")
 \arguments{
 \item{loan_cash_flows}{Data frame. Output from \code{calculate_cash_flows()}
 containing projected loan cash flows with required columns: LOAN_ID,
-eff_date, date, total_principal, investor_principal.}
+eff_date, date, month, total_principal, investor_principal.}
 
 \item{principal_column}{Character. Column name for principal cash flows to use.
 Options:
@@ -37,6 +37,11 @@ WAL measures the time-weighted principal repayments and does not include
 interest payments or apply discounting. Unlike duration, WAL is not sensitive
 to interest rates—it purely reflects the timing and amount of principal
 repayment.
+
+Time measurement: The month column is treated as the projection index, where
+month = 1 corresponds to time 0 (the effective date). Timing calculations use
+t = (month - 1) / 12. This means month = 1 has t = 0 years, month = 2 has
+t = 1/12 years (one month from eff_date), and so on.
 
 The function calculates:
 \itemize{

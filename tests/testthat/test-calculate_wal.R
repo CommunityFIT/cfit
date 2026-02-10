@@ -10,6 +10,7 @@ create_test_cash_flows_wal <- function() {
     LOAN_ID = rep(c("L001", "L002"), each = 12),
     eff_date = as.Date("2024-01-01"),
     date = rep(seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12), 2),
+    month = rep(1:12, 2),
     total_principal = rep(c(800, 1200), each = 12),
     investor_principal = rep(c(760, 1140), each = 12)
   )
@@ -65,6 +66,13 @@ test_that("calculate_wal errors when required columns are missing", {
   expect_error(
     calculate_wal(cash_flows_no_id),
     "loan_cash_flows is missing required columns: LOAN_ID"
+  )
+
+  # Remove month
+  cash_flows_no_month <- cash_flows %>% select(-month)
+  expect_error(
+    calculate_wal(cash_flows_no_month),
+    "loan_cash_flows is missing required columns: month"
   )
 
   # Remove multiple columns
@@ -154,31 +162,46 @@ test_that("calculate_wal errors when no valid rows remain after filtering", {
   )
 })
 
-# Test 10: Errors when total principal is zero ----
-test_that("calculate_wal errors when total principal is zero", {
+# Test 10: Warns and filters loans with zero principal ----
+test_that("calculate_wal warns and filters loans with zero principal", {
+  cash_flows <- create_test_cash_flows_wal()
+
+  # Set one loan to zero principal
+  cash_flows$total_principal[cash_flows$LOAN_ID == "L001"] <- 0
+
+  expect_warning(
+    result <- calculate_wal(cash_flows, principal_column = "total_principal"),
+    "Removed 1 loan\\(s\\) with zero total_principal from WAL calculation"
+  )
+
+  # Should still calculate for remaining loan
+  expect_s3_class(result, "data.frame")
+  expect_true(result$portfolio_wal > 0)
+})
+
+# Test 11: Errors when all loans have zero principal ----
+test_that("calculate_wal errors when all loans have zero principal", {
   cash_flows <- create_test_cash_flows_wal()
 
   # Set all principal to zero
   cash_flows$total_principal <- 0
-  cash_flows$investor_principal <- 0
 
-  expect_error(
-    calculate_wal(cash_flows, principal_column = "total_principal"),
-    "Total principal is zero"
-  )
-
-  expect_error(
-    calculate_wal(cash_flows, principal_column = "investor_principal"),
-    "Total principal is zero"
+  expect_warning(
+    expect_error(
+      calculate_wal(cash_flows, principal_column = "total_principal"),
+      "No loans remaining after filtering zero principal"
+    ),
+    "Removed 2 loan\\(s\\)"
   )
 })
 
-# Test 11: Single loan portfolio ----
+# Test 12: Single loan portfolio ----
 test_that("calculate_wal works with single loan", {
   cash_flows <- data.frame(
     LOAN_ID = rep("L001", 12),
     eff_date = as.Date("2024-01-01"),
     date = seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12),
+    month = 1:12,
     total_principal = 800,
     investor_principal = 760
   )
@@ -190,34 +213,36 @@ test_that("calculate_wal works with single loan", {
   expect_true(result$portfolio_wal > 0)
 })
 
-# Test 12: WAL with equal principal payments (constant amortization) ----
+# Test 13: WAL with equal principal payments (constant amortization) ----
 test_that("calculate_wal is correct for equal principal payments", {
   # Create loan with equal principal payments each month
   cash_flows <- data.frame(
     LOAN_ID = rep("L001", 12),
     eff_date = as.Date("2024-01-01"),
     date = seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12),
+    month = 1:12,
     total_principal = 100,  # Equal payments
     investor_principal = 95
   )
 
   result <- calculate_wal(cash_flows)
 
-  # For equal payments over 12 months, WAL should be approximately 6.5 months
-  # WAL = (1*100 + 2*100 + ... + 12*100) / (12*100)
-  # WAL = (1+2+...+12) / 12 = 78/12 = 6.5 months = 0.542 years
-  expected_wal <- sum(1:12) / 12 / 12  # Convert months to years
+  # For equal payments over 12 months, using t = (month - 1) / 12:
+  # WAL = (0*100 + 1/12*100 + 2/12*100 + ... + 11/12*100) / (12*100)
+  # WAL = sum(0:11) / 12 / 12 = 66 / 144 = 0.458333 years
+  expected_wal <- sum(0:11) / 12 / 12
 
   expect_equal(result$portfolio_wal, expected_wal, tolerance = 0.001)
 })
 
-# Test 13: WAL with front-loaded principal (bullet at start) ----
+# Test 14: WAL with front-loaded principal (bullet at start) ----
 test_that("calculate_wal with front-loaded principal is shorter", {
   # Create loan with most principal paid early
   cash_flows_front <- data.frame(
     LOAN_ID = rep("L001", 12),
     eff_date = as.Date("2024-01-01"),
     date = seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12),
+    month = 1:12,
     total_principal = c(rep(200, 3), rep(50, 9)),
     investor_principal = c(rep(190, 3), rep(47.5, 9))
   )
@@ -227,6 +252,7 @@ test_that("calculate_wal with front-loaded principal is shorter", {
     LOAN_ID = rep("L001", 12),
     eff_date = as.Date("2024-01-01"),
     date = seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12),
+    month = 1:12,
     total_principal = 100,
     investor_principal = 95
   )
@@ -238,13 +264,14 @@ test_that("calculate_wal with front-loaded principal is shorter", {
   expect_true(result_front$portfolio_wal < result_equal$portfolio_wal)
 })
 
-# Test 14: WAL with back-loaded principal (bullet at end) ----
+# Test 15: WAL with back-loaded principal (bullet at end) ----
 test_that("calculate_wal with back-loaded principal is longer", {
   # Create loan with most principal paid late
   cash_flows_back <- data.frame(
     LOAN_ID = rep("L001", 12),
     eff_date = as.Date("2024-01-01"),
     date = seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12),
+    month = 1:12,
     total_principal = c(rep(50, 9), rep(200, 3)),
     investor_principal = c(rep(47.5, 9), rep(190, 3))
   )
@@ -254,6 +281,7 @@ test_that("calculate_wal with back-loaded principal is longer", {
     LOAN_ID = rep("L001", 12),
     eff_date = as.Date("2024-01-01"),
     date = seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12),
+    month = 1:12,
     total_principal = 100,
     investor_principal = 95
   )
@@ -265,7 +293,7 @@ test_that("calculate_wal with back-loaded principal is longer", {
   expect_true(result_back$portfolio_wal > result_equal$portfolio_wal)
 })
 
-# Test 15: Large portfolio (performance check) ----
+# Test 16: Large portfolio (performance check) ----
 test_that("calculate_wal handles larger portfolios efficiently", {
   # Create 100 loans with 60 months each = 6,000 rows
   n_loans <- 100
@@ -275,6 +303,7 @@ test_that("calculate_wal handles larger portfolios efficiently", {
     LOAN_ID = rep(paste0("L", sprintf("%03d", 1:n_loans)), each = n_months),
     eff_date = as.Date("2024-01-01"),
     date = rep(seq.Date(as.Date("2024-02-01"), by = "month", length.out = n_months), n_loans),
+    month = rep(1:n_months, n_loans),
     total_principal = rep(runif(n_loans, 200, 800), each = n_months),
     investor_principal = rep(runif(n_loans, 190, 760), each = n_months)
   )
@@ -289,7 +318,7 @@ test_that("calculate_wal handles larger portfolios efficiently", {
   expect_true(as.numeric(difftime(end_time, start_time, units = "secs")) < 5)
 })
 
-# Test 16: Date format handling ----
+# Test 17: Date format handling ----
 test_that("calculate_wal handles date formats correctly", {
   cash_flows <- create_test_cash_flows_wal()
 
@@ -303,7 +332,7 @@ test_that("calculate_wal handles date formats correctly", {
   expect_true(result$portfolio_wal > 0)
 })
 
-# Test 17: WAL is always positive ----
+# Test 18: WAL is always positive ----
 test_that("portfolio WAL is always positive for valid data", {
   cash_flows <- create_test_cash_flows_wal()
 
@@ -314,7 +343,7 @@ test_that("portfolio WAL is always positive for valid data", {
   expect_true(result2$portfolio_wal > 0)
 })
 
-# Test 18: Multiple loans with different schedules ----
+# Test 19: Multiple loans with different schedules ----
 test_that("calculate_wal handles heterogeneous loan schedules correctly", {
   # Loan 1: Front-loaded
   # Loan 2: Equal payments
@@ -323,6 +352,7 @@ test_that("calculate_wal handles heterogeneous loan schedules correctly", {
     LOAN_ID = rep(c("L001", "L002", "L003"), each = 12),
     eff_date = as.Date("2024-01-01"),
     date = rep(seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12), 3),
+    month = rep(1:12, 3),
     total_principal = c(
       c(rep(200, 3), rep(50, 9)),   # Front-loaded
       rep(100, 12),                  # Equal
@@ -343,12 +373,13 @@ test_that("calculate_wal handles heterogeneous loan schedules correctly", {
   expect_true(result$portfolio_wal < 1)
 })
 
-# Test 19: Zero principal in some periods ----
+# Test 20: Zero principal in some periods ----
 test_that("calculate_wal handles zero principal in some periods", {
   cash_flows <- data.frame(
     LOAN_ID = rep("L001", 12),
     eff_date = as.Date("2024-01-01"),
     date = seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12),
+    month = 1:12,
     total_principal = c(0, 0, 0, rep(100, 9)),  # No principal first 3 months
     investor_principal = c(0, 0, 0, rep(95, 9))
   )
@@ -358,12 +389,11 @@ test_that("calculate_wal handles zero principal in some periods", {
   expect_s3_class(result, "data.frame")
   expect_true(result$portfolio_wal > 0)
 
-  # WAL should reflect that principal starts in month 4
-  # So WAL should be > 0.25 years (3 months / 12)
+  # With t = (month - 1) / 12, first payment is at month 4, which is t = 3/12 = 0.25
   expect_true(result$portfolio_wal > 0.25)
 })
 
-# Test 20: Portfolio with varying loan sizes ----
+# Test 21: Portfolio with varying loan sizes ----
 test_that("calculate_wal properly weights loans by principal amount", {
   # Small loan with short WAL
   # Large loan with long WAL
@@ -371,6 +401,7 @@ test_that("calculate_wal properly weights loans by principal amount", {
     LOAN_ID = rep(c("SMALL", "LARGE"), each = 12),
     eff_date = as.Date("2024-01-01"),
     date = rep(seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12), 2),
+    month = rep(1:12, 2),
     total_principal = c(
       rep(10, 12),    # Small loan: $10/month
       rep(1000, 12)   # Large loan: $1000/month (100x larger)
@@ -384,7 +415,29 @@ test_that("calculate_wal properly weights loans by principal amount", {
   result <- calculate_wal(cash_flows)
 
   # Since both have same schedule, WAL should be same as equal payment WAL
-  expected_wal <- sum(1:12) / 12 / 12
+  expected_wal <- sum(0:11) / 12 / 12
+
+  expect_equal(result$portfolio_wal, expected_wal, tolerance = 0.001)
+})
+
+# Test 22: Time calculation using month column ----
+test_that("calculate_wal correctly uses month column for time calculation", {
+  cash_flows <- data.frame(
+    LOAN_ID = rep("L001", 3),
+    eff_date = as.Date("2024-01-01"),
+    date = as.Date(c("2024-02-01", "2024-03-01", "2024-04-01")),
+    month = c(1, 2, 3),
+    total_principal = c(100, 100, 100),
+    investor_principal = c(95, 95, 95)
+  )
+
+  result <- calculate_wal(cash_flows)
+
+  # Manual calculation:
+  # t_years for months 1,2,3 = (0, 1/12, 2/12)
+  # WAL = (0*100 + 1/12*100 + 2/12*100) / 300
+  # WAL = (0 + 100/12 + 200/12) / 300 = (300/12) / 300 = 25 / 300 = 1/12 = 0.08333
+  expected_wal <- (0 + 1/12 + 2/12) / 3
 
   expect_equal(result$portfolio_wal, expected_wal, tolerance = 0.001)
 })
