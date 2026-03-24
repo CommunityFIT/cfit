@@ -280,8 +280,10 @@ For more details, see `?calculate_duration` and `?calculate_wal`.
 
 ## Roadmap
 
-Planned functions include:
-- CECL-oriented cash flow and loss analytics
+Planned improvements include:
+- Add a linear incentive prepay model to calculate_cash_flows()
+- Re-factor calculate_cash_flows() to make it more compuationally efficient
+- Create calculate_effective_duration()
 
 ## Contributing
 
