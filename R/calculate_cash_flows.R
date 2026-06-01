@@ -139,6 +139,9 @@ calculate_cash_flows <- function(data, config = list()) {
     credit_loss_reduces_interest = TRUE,
     de_minimis_balance = 1.00,
 
+    # Prepayment model: "tier_static" (default) or "linear_incentive"
+    prepay_model = "tier_static",
+
     # CPR and credit cost vectors (all zeros by default)
     cpr_vec = c("default" = 0.0),
     credit_cost_vec = c("default" = 0.0),
@@ -158,6 +161,12 @@ calculate_cash_flows <- function(data, config = list()) {
 
   # Validate configuration
   validate_config(cfg, data)
+
+  # Validate prepay_model
+  if (!cfg$prepay_model %in% c("tier_static", "linear_incentive")) {
+    stop("prepay_model must be 'tier_static' or 'linear_incentive'. Got: '",
+         cfg$prepay_model, "'")
+  }
 
   # Validate required columns exist
   required_cols <- c(cfg$col_balance, cfg$col_rate, cfg$col_term, cfg$col_start_date)
@@ -221,6 +230,10 @@ calculate_cash_flows <- function(data, config = list()) {
     }
   }
 
+  # Resolve per-loan annual CPR via the configured prepayment model.
+  # Keystone for v0.2.4: CPR becomes a per-loan input to the engine.
+  cpr_per_loan <- resolve_prepay_cpr(data, cfg, default_tier)
+
   # Show progress for large portfolios
   if (cfg$show_progress && nrow(data) > 1000) {
     message("Processing ", format(nrow(data), big.mark = ","), " loans...")
@@ -235,6 +248,7 @@ calculate_cash_flows <- function(data, config = list()) {
       term = data[[cfg$col_term]],
       start_date = data[[cfg$col_start_date]],
       tier = if (has_tier) data[[cfg$col_tier]] else default_tier,
+      cpr = cpr_per_loan,
       monthly_payment_val = if (!is.null(cfg$col_monthly_payment)) data[[cfg$col_monthly_payment]] else NA_real_,
       origbalance = if (!is.null(cfg$col_orig_balance)) data[[cfg$col_orig_balance]] else NA_real_
     ),
@@ -478,6 +492,7 @@ generate_single_loan_cash_flow <- function(loan_id,
                                            term,
                                            start_date,
                                            tier,
+                                           cpr,
                                            monthly_payment_val,
                                            origbalance,
                                            cfg,
@@ -510,7 +525,8 @@ generate_single_loan_cash_flow <- function(loan_id,
   monthly_servicing <- cfg$servicing_fee / 12
   monthly_reporting <- cfg$annual_reporting_fee / 12
   monthly_credit_cost <- cfg$credit_cost_vec[[tier]] / 12
-  monthly_smm <- 1 - (1 - cfg$cpr_vec[[tier]])^(1/12)  # Single Monthly Mortality
+  # CPR is now pre-resolved per loan by resolve_prepay_cpr(); see prepay_model.
+  monthly_smm <- 1 - (1 - cpr)^(1/12) # Single Monthly Mortality
 
   # Scheduled payment calculation
   use_monthly_payment <- !is.na(monthly_payment_val) && monthly_payment_val > 0
