@@ -596,23 +596,20 @@ generate_single_loan_cash_flow <- function(loan_id,
     origbalance <- principal
   }
 
-  # Tier is now used only for credit-cost lookup and labeling; CPR is
-  # pre-resolved per loan. Fall back to default if not covered by credit costs.
+  # Tier is used for credit-cost lookup and labeling; CPR is pre-resolved.
   if (!tier %in% names(cfg$credit_cost_vec)) {
     tier <- default_tier
   }
 
   # Monthly rates and factors
-  monthly_rate <- rate / 12
-  monthly_servicing <- cfg$servicing_fee / 12
-  monthly_reporting <- cfg$annual_reporting_fee / 12
+  monthly_rate        <- rate / 12
+  monthly_servicing   <- cfg$servicing_fee / 12
+  monthly_reporting   <- cfg$annual_reporting_fee / 12
   monthly_credit_cost <- cfg$credit_cost_vec[[tier]] / 12
-  # CPR is now pre-resolved per loan by resolve_prepay_cpr(); see prepay_model.
-  monthly_smm <- 1 - (1 - cpr)^(1/12) # Single Monthly Mortality
+  monthly_smm         <- 1 - (1 - cpr)^(1 / 12)   # SMM (CPR pre-resolved per loan)
 
   # Scheduled payment calculation
   use_monthly_payment <- !is.na(monthly_payment_val) && monthly_payment_val > 0
-
   if (use_monthly_payment) {
     scheduled_payment <- monthly_payment_val
   } else {
@@ -623,142 +620,145 @@ generate_single_loan_cash_flow <- function(loan_id,
     }
   }
 
-  # Initialize
-  balance <- principal
+  # Pre-computed payment dates
+  all_dates <- seq.Date(start_date, by = "month", length.out = term)
+
+  # Pre-allocated atomic accumulators (one slot per scheduled month)
+  starting_balance_v    <- numeric(term)
+  adjusted_balance_v    <- numeric(term)
+  accrual_balance_v     <- numeric(term)
+  gross_interest_v      <- numeric(term)
+  servicing_fee_v       <- numeric(term)
+  reporting_fee_v       <- numeric(term)
+  total_fees_v          <- numeric(term)
+  scheduled_principal_v <- numeric(term)
+  prepayment_v          <- numeric(term)
+  total_principal_v     <- numeric(term)
+  credit_loss_v         <- numeric(term)
+  remaining_balance_v   <- numeric(term)
+
+  balance     <- principal
   min_balance <- 0.01
+  n_months    <- 0L
 
-  # CHANGE 2: Use base R seq() with months for better month-end handling than lubridate
-  max_months <- term
-  all_dates <- seq.Date(start_date, by = "month", length.out = max_months)
-
-  # Pre-allocate list with expected size
-  cash_flows <- vector("list", term)
-  i <- 1
-
-  # Cash flow generation loop
+  # Sequential balance roll-forward (each month depends on the prior)
+  i <- 1L
   while (i <= term && balance >= min_balance) {
+    sb <- balance
 
-    starting_balance <- balance
+    # Cap credit loss at 100% of starting balance
+    cl <- min(sb * monthly_credit_cost, sb)
 
-    # CHANGE 1: Cap credit loss at 100% of starting balance
-    credit_loss <- min(starting_balance * monthly_credit_cost, starting_balance)
+    # Prepayment capped at balance available after credit loss
+    max_prepay <- max(0, sb - cl)
+    pp <- min(sb * monthly_smm, max_prepay)
 
-    # Calculate prepayment - Cap at available balance after credit loss
-    max_prepayment <- max(0, starting_balance - credit_loss)
-    prepayment <- min(starting_balance * monthly_smm, max_prepayment)
+    # Balance after prepayment and credit loss
+    ab <- max(0, sb - pp - cl)
 
-    # Calculate adjusted balance (after prepayment and credit loss)
-    adjusted_balance <- starting_balance - prepayment - credit_loss
-    adjusted_balance <- max(0, adjusted_balance)
+    # Balance used for interest and fees
+    acc <- if (cfg$interest_on_starting_balance) sb else ab
 
-    # Determine which balance to use for interest and fees
-    if (cfg$interest_on_starting_balance) {
-      accrual_balance <- starting_balance
-    } else {
-      accrual_balance <- adjusted_balance
-    }
+    gi <- acc * monthly_rate
+    sf <- acc * monthly_servicing
+    rf <- acc * monthly_reporting
+    tf <- sf + rf
 
-    # Calculate interest and fees on the chosen balance
-    gross_interest <- accrual_balance * monthly_rate
-    servicing_fee_amt <- accrual_balance * monthly_servicing
-    reporting_fee_amt <- accrual_balance * monthly_reporting
-    total_fees <- servicing_fee_amt + reporting_fee_amt
-
-    # Scheduled principal payment
-    scheduled_principal <- scheduled_payment - gross_interest
-    scheduled_principal <- max(0, scheduled_principal)
-    scheduled_principal <- min(scheduled_principal, adjusted_balance)
+    # Scheduled principal
+    sp <- max(0, scheduled_payment - gi)
+    sp <- min(sp, ab)
 
     # Total principal returned
-    total_principal <- scheduled_principal + prepayment
-    total_principal <- min(total_principal, adjusted_balance)
+    tp <- min(sp + pp, ab)
 
-    # Ending balance (before de minimis adjustment)
-    remaining_balance <- starting_balance - total_principal - credit_loss
-    remaining_balance <- max(0, remaining_balance)
+    # Ending balance before de minimis adjustment
+    rb <- max(0, sb - tp - cl)
 
-    # De minimis balance handling
-    if (remaining_balance > 0 && remaining_balance < cfg$de_minimis_balance) {
-      total_principal <- total_principal + remaining_balance
-      remaining_balance <- 0
+    # De minimis handling
+    if (rb > 0 && rb < cfg$de_minimis_balance) {
+      tp <- tp + rb
+      rb <- 0
     }
 
-    # Store cash flow with pre-calculated date
-    cash_flows[[i]] <- tibble::tibble(
-      LOAN_ID = loan_id,
-      eff_date = start_date,
-      rate = rate,
-      tier = tier,
-      month = i,
-      date = all_dates[i],
-      starting_balance = starting_balance,
-      adjusted_balance = adjusted_balance,
-      accrual_balance = accrual_balance,
-      scheduled_payment = scheduled_payment,
-      gross_interest = gross_interest,
-      servicing_fee_amt = servicing_fee_amt,
-      reporting_fee_amt = reporting_fee_amt,
-      total_fees = total_fees,
-      scheduled_principal = scheduled_principal,
-      prepayment = prepayment,
-      total_principal = total_principal,
-      credit_loss = credit_loss,
-      remaining_balance = remaining_balance
-    )
+    starting_balance_v[i]    <- sb
+    adjusted_balance_v[i]    <- ab
+    accrual_balance_v[i]     <- acc
+    gross_interest_v[i]      <- gi
+    servicing_fee_v[i]       <- sf
+    reporting_fee_v[i]       <- rf
+    total_fees_v[i]          <- tf
+    scheduled_principal_v[i] <- sp
+    prepayment_v[i]          <- pp
+    total_principal_v[i]     <- tp
+    credit_loss_v[i]         <- cl
+    remaining_balance_v[i]   <- rb
 
-    balance <- remaining_balance
-    i <- i + 1
-
+    n_months <- i
+    balance  <- rb
+    i        <- i + 1L
     if (balance == 0) break
   }
 
-  # Bind cash flows
-  cash_flows_df <- dplyr::bind_rows(cash_flows[1:(i-1)])
-
-  if (nrow(cash_flows_df) == 0) {
+  if (n_months == 0L) {
     return(tibble::tibble())
   }
 
-  # Calculate origination fee using ORIGINAL term
-  monthly_orig_fee <- if (term > 0 && cfg$origination_fee > 0) {
+  idx <- seq_len(n_months)
+
+  # Origination fee (constant per loan, using ORIGINAL term)
+  orig_fee <- if (term > 0 && cfg$origination_fee > 0) {
     (cfg$origination_fee * origbalance) / term
   } else {
     0
   }
 
-  # Add investor calculations with origination fee
-  cash_flows_df <- cash_flows_df %>%
-    dplyr::mutate(
-      # Origination fee (same for all months)
-      orig_fee = monthly_orig_fee,
+  gi <- gross_interest_v[idx]
+  tf <- total_fees_v[idx]
+  tp <- total_principal_v[idx]
+  cl <- credit_loss_v[idx]
 
-      # Calculate net interest based on accounting treatment
-      net_interest_raw = if (cfg$credit_loss_reduces_interest) {
-        # Default: credit losses reduce interest (participation accounting)
-        gross_interest - total_fees - orig_fee - credit_loss
-      } else {
-        # Alternative: credit losses only reduce principal (balance sheet accounting)
-        gross_interest - total_fees - orig_fee
-      },
+  # Net interest by accounting treatment
+  net_interest_raw <- if (cfg$credit_loss_reduces_interest) {
+    gi - tf - orig_fee - cl
+  } else {
+    gi - tf - orig_fee
+  }
+  net_interest       <- pmax(net_interest_raw, 0)
+  orig_fee_absorbed  <- dplyr::if_else(net_interest_raw < 0,
+                                       orig_fee + net_interest_raw, orig_fee)
+  total_payment      <- gi + tp
+  investor_principal <- tp * cfg$investor_share
+  investor_interest  <- net_interest * cfg$investor_share
+  investor_total     <- investor_principal + investor_interest
 
-      # Floor at zero (investor never pays servicer)
-      net_interest = pmax(net_interest_raw, 0),
-
-      # Track how much orig fee was "absorbed" due to insufficient interest
-      orig_fee_absorbed = dplyr::if_else(
-        net_interest_raw < 0,
-        orig_fee + net_interest_raw,
-        orig_fee
-      ),
-
-      # Total payment to all parties
-      total_payment = gross_interest + total_principal,
-
-      # Investor share
-      investor_principal = total_principal * cfg$investor_share,
-      investor_interest = net_interest * cfg$investor_share,
-      investor_total = investor_principal + investor_interest
-    )
-
-  return(cash_flows_df)
+  # Single tibble construction (column order matches v0.2.3 output exactly)
+  tibble::tibble(
+    LOAN_ID             = loan_id,
+    eff_date            = start_date,
+    rate                = rate,
+    tier                = tier,
+    month               = as.numeric(idx),
+    date                = all_dates[idx],
+    starting_balance    = starting_balance_v[idx],
+    adjusted_balance    = adjusted_balance_v[idx],
+    accrual_balance     = accrual_balance_v[idx],
+    scheduled_payment   = scheduled_payment,
+    gross_interest      = gi,
+    servicing_fee_amt   = servicing_fee_v[idx],
+    reporting_fee_amt   = reporting_fee_v[idx],
+    total_fees          = tf,
+    scheduled_principal = scheduled_principal_v[idx],
+    prepayment          = prepayment_v[idx],
+    total_principal     = tp,
+    credit_loss         = cl,
+    remaining_balance   = remaining_balance_v[idx],
+    orig_fee            = orig_fee,
+    net_interest_raw    = net_interest_raw,
+    net_interest        = net_interest,
+    orig_fee_absorbed   = orig_fee_absorbed,
+    total_payment       = total_payment,
+    investor_principal  = investor_principal,
+    investor_interest   = investor_interest,
+    investor_total      = investor_total
+  )
 }
