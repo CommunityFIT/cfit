@@ -1,3 +1,39 @@
+# cfit 0.2.4
+
+## New features
+
+* `calculate_cash_flows()` gains a `prepay_model` option controlling how the
+  conditional prepayment rate (CPR) is derived:
+  * `"tier_static"` (default) — unchanged behaviour; applies tier-keyed CPR
+    from `cpr_vec`.
+  * `"linear_incentive"` — derives a per-loan CPR from the borrower's rate
+    incentive: `CPR = clamp(base_cpr + beta * (coupon - current_market_rate),
+    cpr_min, cpr_max)`. Parameters `base_cpr_vec`, `beta_vec`, `cpr_min_vec`,
+    and `cpr_max_vec` are tier-keyed; `current_market_rate` is a scalar and
+    `coupon` is the gross note rate. This makes prepayment responsive to the
+    rate environment.
+
+## Improvements
+
+* Cash flow engine performance: per-loan projections are accumulated in
+  preallocated atomic vectors and assembled in a single `tibble()` call,
+  rather than constructing one data frame per projected month. The engine's
+  internal performance test dropped from roughly 79s to 7s, with identical
+  output.
+
+## Internal
+
+* CPR resolution is factored into an internal `resolve_prepay_cpr()` helper, so
+  the engine treats CPR as a per-loan input independent of its derivation.
+* Added golden-master regression tests freezing v0.2.3 output for the
+  `tier_static` path and the new `linear_incentive` output, guarding against
+  behavioural drift across the refactor.
+
+## Notes
+
+* No breaking changes. Calls default to `prepay_model = "tier_static"` and
+  produce identical results to v0.2.3.
+
 # cfit 0.2.3
 
 ## New Features
