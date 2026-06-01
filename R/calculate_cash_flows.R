@@ -59,6 +59,13 @@ utils::globalVariables(c(
 #'   \item monthly_totals_group_vars: Optional character vector of column names to group monthly totals by,
 #'     in addition to date (default: NULL). For example, c("tier") to see monthly totals by tier.
 #'   \item show_progress: Show progress messages for large portfolios (default: TRUE)
+#'   \item prepay_model: "tier_static" (default) or "linear_incentive"
+#'   \item current_market_rate: Scalar market rate (decimal) for linear_incentive;
+#'     rate_incentive = coupon - current_market_rate, coupon = col_rate (gross)
+#'   \item base_cpr_vec: Tier-keyed intercept CPR (linear_incentive)
+#'   \item beta_vec: Tier-keyed CPR sensitivity per decimal of rate incentive (linear_incentive)
+#'   \item cpr_min_vec, cpr_max_vec: Tier-keyed clamp bounds on CPR (linear_incentive)
+#'
 #' }
 #'
 #' @importFrom dplyr bind_rows group_by summarise mutate if_else select left_join distinct across all_of arrange
@@ -145,6 +152,13 @@ calculate_cash_flows <- function(data, config = list()) {
     # CPR and credit cost vectors (all zeros by default)
     cpr_vec = c("default" = 0.0),
     credit_cost_vec = c("default" = 0.0),
+    # Linear-incentive model parameters (tier-keyed; used when
+    # prepay_model = "linear_incentive")
+    current_market_rate = NULL,
+    base_cpr_vec = NULL,
+    beta_vec     = NULL,
+    cpr_min_vec  = NULL,
+    cpr_max_vec  = NULL,
 
     # Optional PD/LGD approach (overrides credit_cost_vec if provided)
     pd_vec = NULL,
@@ -213,13 +227,30 @@ calculate_cash_flows <- function(data, config = list()) {
     )
   }
 
-  # Get first tier for default (when col_tier is NULL)
-  default_tier <- names(cfg$cpr_vec)[1]
+  # First tier as default. For linear_incentive the prepay tiers live in
+  # base_cpr_vec rather than cpr_vec.
+  default_tier <- if (cfg$prepay_model == "linear_incentive") {
+    names(cfg$base_cpr_vec)[1]
+  } else {
+    names(cfg$cpr_vec)[1]
+  }
+  prepay_tier_names <- if (cfg$prepay_model == "linear_incentive") {
+    names(cfg$base_cpr_vec)
+  } else {
+    names(cfg$cpr_vec)
+  }
+
+  # Credit costs must cover the default tier, or the engine's tier fallback
+  # would fail (credit cost is looked up by tier regardless of prepay model).
+  if (!default_tier %in% names(cfg$credit_cost_vec)) {
+    stop("Default tier '", default_tier, "' is not present in credit_cost_vec ",
+         "(or the derived PD*LGD vector). Define credit cost for all tiers.")
+  }
 
   # Validate tier values if tier column exists
   if (has_tier) {
     unique_tiers <- unique(data[[cfg$col_tier]])
-    missing_tiers <- setdiff(unique_tiers, names(cfg$cpr_vec))
+    missing_tiers <- setdiff(unique_tiers, prepay_tier_names)
 
     if (length(missing_tiers) > 0) {
       warning(
@@ -349,23 +380,76 @@ validate_config <- function(cfg, data) {
     }
   }
 
-  # Check that cpr_vec and credit_cost_vec have matching names
-  if (!identical(names(cfg$cpr_vec), names(cfg$credit_cost_vec))) {
-    warning(
-      "cpr_vec and credit_cost_vec have different tier names. ",
-      "This may cause unexpected behavior. ",
-      "Ensure both vectors contain the same tier values."
-    )
+  # Validate prepay_model
+  if (!cfg$prepay_model %in% c("tier_static", "linear_incentive")) {
+    stop("prepay_model must be 'tier_static' or 'linear_incentive'. Got: '",
+         cfg$prepay_model, "'")
   }
 
-  # Enforce "default" tier when col_tier is NULL
-  if (is.null(cfg$col_tier) || !cfg$col_tier %in% names(data)) {
-    if (!"default" %in% names(cfg$cpr_vec)) {
-      stop(
-        "When col_tier is NULL or tier column is missing, ",
-        "cpr_vec and credit_cost_vec must contain a 'default' tier.\n",
-        "Current cpr_vec tiers: ", paste(names(cfg$cpr_vec), collapse = ", ")
+  # Prepayment-model-specific validation
+  if (cfg$prepay_model == "tier_static") {
+
+    # Check that cpr_vec and credit_cost_vec have matching names
+    if (!identical(names(cfg$cpr_vec), names(cfg$credit_cost_vec))) {
+      warning(
+        "cpr_vec and credit_cost_vec have different tier names. ",
+        "This may cause unexpected behavior. ",
+        "Ensure both vectors contain the same tier values."
       )
+    }
+
+    # Enforce "default" tier when col_tier is NULL
+    if (is.null(cfg$col_tier) || !cfg$col_tier %in% names(data)) {
+      if (!"default" %in% names(cfg$cpr_vec)) {
+        stop(
+          "When col_tier is NULL or tier column is missing, ",
+          "cpr_vec and credit_cost_vec must contain a 'default' tier.\n",
+          "Current cpr_vec tiers: ", paste(names(cfg$cpr_vec), collapse = ", ")
+        )
+      }
+    }
+
+  } else if (cfg$prepay_model == "linear_incentive") {
+
+    li <- list(base_cpr_vec = cfg$base_cpr_vec, beta_vec = cfg$beta_vec,
+               cpr_min_vec = cfg$cpr_min_vec, cpr_max_vec = cfg$cpr_max_vec)
+    missing <- names(li)[vapply(li, is.null, logical(1))]
+    if (length(missing) > 0) {
+      stop("prepay_model = 'linear_incentive' requires: ",
+           paste(missing, collapse = ", "), ".")
+    }
+    if (is.null(cfg$current_market_rate) || !is.numeric(cfg$current_market_rate) ||
+        length(cfg$current_market_rate) != 1L || !is.finite(cfg$current_market_rate)) {
+      stop("prepay_model = 'linear_incentive' requires a single finite numeric ",
+           "current_market_rate.")
+    }
+    tiers <- names(cfg$base_cpr_vec)
+    if (!all(vapply(li, function(v) setequal(names(v), tiers), logical(1)))) {
+      stop("base_cpr_vec, beta_vec, cpr_min_vec, and cpr_max_vec must cover the ",
+           "same set of tier names.")
+    }
+    if (is.null(cfg$col_tier) || !cfg$col_tier %in% names(data)) {
+      if (!"default" %in% tiers) {
+        stop("When col_tier is NULL, the linear_incentive vectors must contain a ",
+             "'default' tier. Current tiers: ", paste(tiers, collapse = ", "))
+      }
+    }
+    base <- cfg$base_cpr_vec[tiers]; beta <- cfg$beta_vec[tiers]
+    cmin <- cfg$cpr_min_vec[tiers];  cmax <- cfg$cpr_max_vec[tiers]
+    if (any(base < 0) || any(base > 1)) {
+      stop("All base_cpr_vec values must be between 0 and 1.")
+    }
+    if (any(cmin < 0) || any(cmax > 1)) {
+      stop("Require 0 <= cpr_min_vec and cpr_max_vec <= 1 for every tier.")
+    }
+    if (any(cmin > cmax)) {
+      stop("cpr_min_vec must be <= cpr_max_vec for every tier. Violations: ",
+           paste(tiers[cmin > cmax], collapse = ", "))
+    }
+    if (any(beta < 0)) {
+      warning("Negative beta_vec for tier(s): ", paste(tiers[beta < 0], collapse = ", "),
+              ". A negative beta means prepayment falls as the rate incentive rises, ",
+              "which is economically unusual. Proceeding as specified.")
     }
   }
 
@@ -373,15 +457,12 @@ validate_config <- function(cfg, data) {
   if (cfg$servicing_fee < 0 || cfg$servicing_fee > 1) {
     stop("servicing_fee must be between 0 and 1 (as a decimal). Got: ", cfg$servicing_fee)
   }
-
   if (cfg$annual_reporting_fee < 0 || cfg$annual_reporting_fee > 1) {
     stop("annual_reporting_fee must be between 0 and 1 (as a decimal). Got: ", cfg$annual_reporting_fee)
   }
-
   if (cfg$investor_share < 0 || cfg$investor_share > 1) {
     stop("investor_share must be between 0 and 1. Got: ", cfg$investor_share)
   }
-
   if (cfg$de_minimis_balance < 0) {
     stop("de_minimis_balance must be non-negative. Got: ", cfg$de_minimis_balance)
   }
@@ -515,8 +596,9 @@ generate_single_loan_cash_flow <- function(loan_id,
     origbalance <- principal
   }
 
-  # Validate tier - use default if not in vectors
-  if (!tier %in% names(cfg$cpr_vec)) {
+  # Tier is now used only for credit-cost lookup and labeling; CPR is
+  # pre-resolved per loan. Fall back to default if not covered by credit costs.
+  if (!tier %in% names(cfg$credit_cost_vec)) {
     tier <- default_tier
   }
 

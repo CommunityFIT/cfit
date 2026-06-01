@@ -27,10 +27,20 @@ resolve_prepay_cpr <- function(data, cfg, default_tier) {
     return(unname(cfg$cpr_vec[tier_eff]))
 
   } else if (identical(cfg$prepay_model, "linear_incentive")) {
-    stop(
-      "prepay_model = 'linear_incentive' is not implemented yet ",
-      "(arrives in v0.2.4 Step 2). Use prepay_model = 'tier_static' for now."
-    )
+    tiers    <- names(cfg$base_cpr_vec)
+    tier_eff <- ifelse(tier_raw %in% tiers, tier_raw, default_tier)
+
+    coupon    <- data[[cfg$col_rate]]
+    incentive <- coupon - cfg$current_market_rate          # per loan
+
+    base <- cfg$base_cpr_vec[tier_eff]
+    beta <- cfg$beta_vec[tier_eff]
+    cmin <- cfg$cpr_min_vec[tier_eff]
+    cmax <- cfg$cpr_max_vec[tier_eff]
+
+    raw_cpr <- base + beta * incentive
+    cpr     <- pmin(pmax(raw_cpr, cmin), cmax)              # clamp
+    return(unname(cpr))
 
   } else {
     stop(

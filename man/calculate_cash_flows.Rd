@@ -59,6 +59,13 @@ When set to FALSE, credit losses reduce principal balances only and do not direc
 \item monthly_totals_group_vars: Optional character vector of column names to group monthly totals by,
 in addition to date (default: NULL). For example, c("tier") to see monthly totals by tier.
 \item show_progress: Show progress messages for large portfolios (default: TRUE)
+\item prepay_model: "tier_static" (default) or "linear_incentive"
+\item current_market_rate: Scalar market rate (decimal) for linear_incentive;
+rate_incentive = coupon - current_market_rate, coupon = col_rate (gross)
+\item base_cpr_vec: Tier-keyed intercept CPR (linear_incentive)
+\item beta_vec: Tier-keyed CPR sensitivity per decimal of rate incentive (linear_incentive)
+\item cpr_min_vec, cpr_max_vec: Tier-keyed clamp bounds on CPR (linear_incentive)
+
 }
 }
 \examples{

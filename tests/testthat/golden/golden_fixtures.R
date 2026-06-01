@@ -39,6 +39,19 @@ golden_cases <- function() {
                     credit_cost_vec = c(A = 0.01, B = 0.02, C = 0.005),
                     return_monthly_totals = TRUE,
                     monthly_totals_group_vars = "tier")
+    ),
+    linear_incentive = list(
+      data   = port,
+      config = list(
+        prepay_model = "linear_incentive",
+        col_tier = "tier",
+        current_market_rate = 0.05,
+        base_cpr_vec = c(A = 0.06, B = 0.08, C = 0.04),
+        beta_vec     = c(A = 2.0,  B = 2.5,  C = 1.5),
+        cpr_min_vec  = c(A = 0.02, B = 0.02, C = 0.01),
+        cpr_max_vec  = c(A = 0.35, B = 0.40, C = 0.25),
+        credit_cost_vec = c(A = 0.01, B = 0.02, C = 0.005)
+      )
     )
   )
 }
