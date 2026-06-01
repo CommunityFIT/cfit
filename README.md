@@ -25,7 +25,7 @@ library(cfit)
 - `calculate_prepay_speed()` – Calculate SMM and CPR from portfolio snapshots, with validation and configurable column mappings
 
 ### Cash Flow Projection
-- `calculate_cash_flows()` – Project monthly loan-level and portfolio-level cash flows under configurable prepayment, credit loss, and fee assumptions
+- `calculate_cash_flows()` – Project monthly loan-level and portfolio-level cash flows under configurable prepayment (static by tier, or a rate-responsive linear-incentive model), credit loss, and fee assumptions
 
 ### Duration and WAL Analysis
 - `calculate_duration()` – Calculate Macaulay duration, modified duration, and analytical convexity for interest rate risk measurement
@@ -194,6 +194,28 @@ config_tiered <- list(
 
 cash_flows_tiered <- calculate_cash_flows(loan_portfolio_tiered, config_tiered)
 ```
+#### Rate-Responsive Prepayment (Linear Incentive)
+
+Instead of fixed CPR assumptions, derive each loan's prepayment speed from its *rate incentive* — the gap between its coupon and the current market rate. As market rates fall, in-the-money borrowers prepay faster:
+
+```r
+# Same tiered portfolio as above
+config_incentive <- list(
+  col_tier            = "tier",
+  prepay_model        = "linear_incentive",
+  current_market_rate = 0.05,                          # current market/refi rate
+  base_cpr_vec = c("A" = 0.06, "B" = 0.08, "C" = 0.04), # intercept CPR by tier
+  beta_vec     = c("A" = 2.0,  "B" = 2.5,  "C" = 1.5),  # CPR sensitivity per unit of incentive
+  cpr_min_vec  = c("A" = 0.02, "B" = 0.02, "C" = 0.01), # lower clamp
+  cpr_max_vec  = c("A" = 0.35, "B" = 0.40, "C" = 0.25), # upper clamp
+  credit_cost_vec = c("A" = 0.008, "B" = 0.015, "C" = 0.025),
+  servicing_fee   = 0.0025
+)
+
+# Per loan: CPR = clamp(base_cpr + beta * (coupon - current_market_rate), cpr_min, cpr_max)
+cash_flows_incentive <- calculate_cash_flows(loan_portfolio_tiered, config_incentive)
+```
+
 
 For more details, see `?calculate_cash_flows`.
 
@@ -281,9 +303,8 @@ For more details, see `?calculate_duration` and `?calculate_wal`.
 ## Roadmap
 
 Planned improvements include:
-- Add a linear incentive prepay model to calculate_cash_flows()
-- Re-factor calculate_cash_flows() to make it more compuationally efficient
-- Create calculate_effective_duration()
+
+- `calculate_effective_duration()` — interest-rate sensitivity under parallel rate shocks (e.g. ±100 bps), using the rate-responsive cash flows introduced in v0.2.4
 
 ## Contributing
 
