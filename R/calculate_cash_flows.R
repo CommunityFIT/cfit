@@ -47,10 +47,18 @@ utils::globalVariables(c(
 #'   \item annual_reporting_fee: Annual reporting fee rate as decimal (default: 0.00)
 #'   \item investor_share: Investor share percentage (default: 1.0 for 100%)
 #'   \item origination_fee: Origination fee rate (default: 0.0000)
-#'   \item interest_on_starting_balance: Calculate interest before or after prepay/losses (default: FALSE)
-#'   \item credit_loss_reduces_interest: Whether credit losses reduce interest cash flows (default: TRUE).
-#'     By default, credit losses are applied against investor cash flows before distribution to investors.
-#'     When set to FALSE, credit losses reduce principal balances only and do not directly reduce interest cash flows.
+#'   \item interest_on_starting_balance: Calculate interest on the starting
+#'     balance, before prepayments and credit losses are removed (default: TRUE).
+#'     TRUE reflects standard monthly-pay consumer loan servicing: borrowers owe
+#'     a full month of interest on the balance outstanding at the start of the
+#'     period, including balances that pay off during the month. Set FALSE to
+#'     accrue interest on the post-prepay/post-loss balance (non-standard,
+#'     conservative).
+#'   \item credit_loss_reduces_interest: Whether credit losses are also deducted
+#'     from interest cash flows (default: FALSE). FALSE applies losses through
+#'     principal balance reduction only. TRUE additionally deducts charge-offs
+#'     from interest, which double-counts the loss and is retained only for
+#'     backward compatibility.
 #'   \item de_minimis_balance: Threshold below which balance is forced to zero (default: 1.00)
 #'   \item cpr_vec: Named vector of CPR rates by tier (default: c("default" = 0.0))
 #'   \item credit_cost_vec: Named vector of annual credit cost rates by tier (default: c("default" = 0.0))
@@ -143,8 +151,8 @@ calculate_cash_flows <- function(data, config = list()) {
     annual_reporting_fee = 0.00,
     investor_share = 1.0,
     origination_fee = 0.0000,
-    interest_on_starting_balance = FALSE,
-    credit_loss_reduces_interest = TRUE,
+    interest_on_starting_balance = TRUE,
+    credit_loss_reduces_interest = FALSE,
     de_minimis_balance = 1.00,
 
     # Prepayment model: "tier_static" (default) or "linear_incentive"
