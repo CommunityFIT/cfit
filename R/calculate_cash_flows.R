@@ -19,7 +19,8 @@ utils::globalVariables(c(
 #' @return Depending on return_monthly_totals setting:
 #'   \itemize{
 #'     \item If FALSE: A data frame with loan-level cash flows containing columns:
-#'       LOAN_ID, eff_date, rate, tier, month, date, starting_balance, adjusted_balance, accrual_balance,
+#'       LOAN_ID, eff_date, rate, tier, month, date (payment date; first payment
+#'       falls one month after eff_date, which is the t=0 valuation anchor), starting_balance, adjusted_balance, accrual_balance,
 #'       scheduled_payment, gross_interest, servicing_fee_amt, reporting_fee_amt,
 #'       total_fees, scheduled_principal, prepayment, total_principal, credit_loss,
 #'       remaining_balance, orig_fee, net_interest, total_payment, investor_principal,
@@ -620,8 +621,11 @@ generate_single_loan_cash_flow <- function(loan_id,
     }
   }
 
-  # Pre-computed payment dates
-  all_dates <- seq.Date(start_date, by = "month", length.out = term)
+  # Pre-computed payment dates: first payment one month AFTER the as-of date
+  # (start_date is the settlement/valuation anchor, t = 0; payments are t = 1..term).
+  # Uses lubridate month arithmetic rather than seq.Date to handle month-ends:
+  # seq.Date from Jan 31 rolls to Mar 3; %m+% months() clamps to Feb 28/29.
+  all_dates <- start_date %m+% months(seq_len(term))
 
   # Pre-allocated atomic accumulators (one slot per scheduled month)
   starting_balance_v    <- numeric(term)
