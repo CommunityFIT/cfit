@@ -15,7 +15,8 @@ calculate_cash_flows(data, config = list())
 Depending on return_monthly_totals setting:
 \itemize{
 \item If FALSE: A data frame with loan-level cash flows containing columns:
-LOAN_ID, eff_date, rate, tier, month, date, starting_balance, adjusted_balance, accrual_balance,
+LOAN_ID, eff_date, rate, tier, month, date (payment date; first payment
+falls one month after eff_date, which is the t=0 valuation anchor), starting_balance, adjusted_balance, accrual_balance,
 scheduled_payment, gross_interest, servicing_fee_amt, reporting_fee_amt,
 total_fees, scheduled_principal, prepayment, total_principal, credit_loss,
 remaining_balance, orig_fee, net_interest, total_payment, investor_principal,
@@ -46,11 +47,29 @@ Configuration list structure:
 \item annual_reporting_fee: Annual reporting fee rate as decimal (default: 0.00)
 \item investor_share: Investor share percentage (default: 1.0 for 100\%)
 \item origination_fee: Origination fee rate (default: 0.0000)
-\item interest_on_starting_balance: Calculate interest before or after prepay/losses (default: FALSE)
-\item credit_loss_reduces_interest: Whether credit losses reduce interest cash flows (default: TRUE).
-By default, credit losses are applied against investor cash flows before distribution to investors.
-When set to FALSE, credit losses reduce principal balances only and do not directly reduce interest cash flows.
+\item interest_on_starting_balance: Calculate interest on the starting
+balance, before prepayments and credit losses are removed (default: TRUE).
+TRUE reflects standard monthly-pay consumer loan servicing: borrowers owe
+a full month of interest on the balance outstanding at the start of the
+period, including balances that pay off during the month. Set FALSE to
+accrue interest on the post-prepay/post-loss balance (non-standard,
+conservative).
+\item credit_loss_reduces_interest: Whether credit losses are also deducted
+from interest cash flows (default: FALSE). FALSE applies losses through
+principal balance reduction only. TRUE additionally deducts charge-offs
+from interest, which double-counts the loss and is retained only for
+backward compatibility.
 \item de_minimis_balance: Threshold below which balance is forced to zero (default: 1.00)
+\item reamortize_survivors: Prepayment cash flow convention (default: TRUE).
+TRUE treats SMM prepayments as full payoffs of a fraction of loans: the
+surviving balance re-amortizes over the remaining term each month, so the
+aggregate scheduled payment declines with the survival factor. This
+matches market/Bloomberg pool conventions. When col_monthly_payment is
+supplied, tape payments are scaled by the cumulative survival factor
+instead. FALSE retains the legacy fixed-payment behavior, which treats
+prepayments as curtailments (original dollar payment held constant),
+accelerating scheduled principal and shortening effective life; retained
+for backward compatibility only.
 \item cpr_vec: Named vector of CPR rates by tier (default: c("default" = 0.0))
 \item credit_cost_vec: Named vector of annual credit cost rates by tier (default: c("default" = 0.0))
 \item pd_vec: Optional named vector of PD rates (overrides credit_cost_vec if provided)

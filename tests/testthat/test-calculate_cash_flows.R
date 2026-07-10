@@ -236,14 +236,14 @@ test_that("monthly_totals correctly aggregates loan-level cash flows", {
 })
 
 # Test 12: Dates are sequential and start from eff_date
-test_that("cash flow dates are sequential and start from eff_date", {
+test_that("cash flow dates are sequential and start one month after eff_date", {
   loan_data <- create_test_portfolio(1)
 
   result <- calculate_cash_flows(loan_data, config = list())
 
   dates <- result$date
   expect_true(all(diff(dates) == 30 | diff(dates) == 31 | diff(dates) == 28))  # Monthly
-  expect_equal(min(dates), as.Date("2025-01-01"))
+  expect_equal(min(dates), as.Date("2025-02-01"))
 })
 
 # Test 13: Validation catches negative balances
@@ -487,25 +487,29 @@ test_that("validate_config enforces 'default' tier when col_tier is NULL", {
 # Test 24: "default" tier is used when tier column missing
 test_that("'default' tier is used when col_tier is NULL", {
   loan_data <- create_test_portfolio(2)
-
   config <- list(
     col_tier = NULL,
     cpr_vec = c("default" = 0.08),
     credit_cost_vec = c("default" = 0.015)
   )
-
   result <- calculate_cash_flows(loan_data, config)
-
   # Should have cash flows for both loans using default tier
   expect_equal(length(unique(result$LOAN_ID)), 2)
 
-  # All loans should have same prepayment rate (from default tier)
-  prepay_rates <- result %>%
-    group_by(LOAN_ID, month) %>%
-    summarise(prepay_rate = prepayment / starting_balance, .groups = "drop")
+  # v0.2.5 convention: SMM is applied to the post-loss, post-scheduled
+  # balance (loss -> scheduled -> prepay), so the realized rate must be
+  # measured against that base, not the starting balance.
+  smm_expected <- 1 - (1 - 0.08)^(1 / 12)
 
-  # Rates should be similar across loans (allowing for rounding)
-  expect_lt(sd(prepay_rates$prepay_rate), 0.001)
+  prepay_rates <- result %>%
+    mutate(prepay_base = starting_balance - credit_loss - scheduled_principal) %>%
+    filter(prepay_base > 1) %>%              # drop payoff/de-minimis tail rows
+    group_by(LOAN_ID, month) %>%
+    summarise(prepay_rate = prepayment / prepay_base, .groups = "drop")
+
+  # Both loans, every month: identical rate, equal to the default-tier SMM
+  expect_lt(sd(prepay_rates$prepay_rate), 1e-8)
+  expect_equal(mean(prepay_rates$prepay_rate), smm_expected, tolerance = 1e-6)
 })
 
 # Test 25: Date conversion is persisted
