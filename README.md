@@ -125,6 +125,31 @@ Generate monthly cash flow projections for a loan portfolio and calculate portfo
 **Outputs**
 - Loan-level monthly projected cash flows
 - Optional aggregated monthly totals for portfolio analysis
+
+**Modeling conventions (v0.2.5+)**
+
+- **Prepayments are full payoffs** (`reamortize_survivors = TRUE`, default):
+  each month, an SMM-derived fraction of loans pays off entirely and the
+  surviving balance re-amortizes over the remaining term. Aggregate scheduled
+  payments decline with the survival factor, consistent with market/Bloomberg
+  pool conventions. Set `reamortize_survivors = FALSE` for legacy
+  fixed-payment (curtailment) behavior, appropriate only for modeling
+  individual borrowers who keep their original payment while paying extra
+  principal.
+- **Payment timing**: `eff_date` is the t = 0 valuation/settlement anchor;
+  the first projected payment falls one month later. When calculating yield,
+  always anchor `start_date` to the effective date from the loan data (as the
+  example below does) — never to the first cash flow date.
+- **Interest accrual**: full-month interest accrues on the starting balance
+  (`interest_on_starting_balance = TRUE`, default), matching standard
+  monthly-pay consumer loan servicing.
+- **Credit losses** reduce principal balances only
+  (`credit_loss_reduces_interest = FALSE`, default); deducting charge-offs
+  from interest as well would double-count the loss.
+- **Application order** within each month: credit loss, then scheduled
+  principal, then prepayment (SMM applied to the post-scheduled balance).
+
+
 ```r
 # Optional: used here only to demonstrate portfolio yield calculation
 # FinCal is not a dependency of cfit
@@ -163,8 +188,10 @@ pool_cfs <- data.frame(
 portfolio_yield <- yield.actual(
   cf = pool_cfs,
   pv = sum(loan_portfolio$balance),
-  start_date = min(loan_portfolio$eff_date),
-  compounding = "monthly"
+  start_date = min(loan_portfolio$eff_date),  # anchor = effective date (t = 0),
+                                              # NOT the first cash flow date
+  compounding = "monthly"    # use "semiannual" for bond-equivalent yield
+                             # comparable to Bloomberg quotes
 )
 
 print(paste("Portfolio Yield:", round(portfolio_yield * 100, 2), "%"))
