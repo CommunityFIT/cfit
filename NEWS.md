@@ -1,3 +1,47 @@
+# cfit 0.2.5
+
+## Significant Changes
+
+* **Survivor re-amortization is now the default prepayment convention**
+  (`reamortize_survivors = TRUE`). SMM prepayments are modeled as full
+  payoffs, with the surviving balance re-amortizing over the remaining
+  term — matching market/Bloomberg pool conventions. The prior behavior
+  held the original dollar payment fixed (curtailment treatment),
+  truncating loan life and understating premium-pool yields by ~25 bps
+  at typical auto speeds. Legacy behavior available via
+  `reamortize_survivors = FALSE`.
+* **First payment date is now one month after the as-of date.** The
+  as-of date is the t = 0 valuation anchor; payment dates run t = 1..term.
+  Downstream scripts that manually re-dated output (or anchored yields
+  to the first cash flow date) must remove those workarounds or they
+  will double-shift.
+* **`interest_on_starting_balance` now defaults to `TRUE`** (full-month
+  interest on the starting balance, standard monthly-pay servicing) and
+  **`credit_loss_reduces_interest` now defaults to `FALSE`** (losses
+  flow through principal only). Configs setting these explicitly are
+  unaffected.
+
+## Other changes
+
+* Payment dates use lubridate month arithmetic: month-end as-of dates
+  clamp (Jan 31 → Feb 28) instead of overflowing (→ Mar 3). After a
+  month-end anchor, all payments fall on month-ends.
+* `scheduled_payment` output column is time-varying under the new
+  convention (declines with the survival factor).
+* Unnamed config elements (typically `<-` used instead of `=` inside
+  `list()`) now raise an error instead of being silently ignored.
+* Incompatible combination `reamortize_survivors = TRUE` with
+  `interest_on_starting_balance = FALSE` warns.
+
+## Validation
+
+* Engine tied to an independent external benchmark (BEY 5.573%, WAL
+  2.34 on the reference loan) and replicated a live Bloomberg quote to
+  within tape-composition tolerance (5.455% vs 5.470% quoted).
+* v0.2.4 cash flow amounts reproduced exactly under legacy flags across
+  all five golden cases; pinned as a permanent backward-compatibility
+  test.
+
 # cfit 0.2.4
 
 ## New features
