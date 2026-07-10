@@ -60,6 +60,16 @@ utils::globalVariables(c(
 #'     from interest, which double-counts the loss and is retained only for
 #'     backward compatibility.
 #'   \item de_minimis_balance: Threshold below which balance is forced to zero (default: 1.00)
+#'   \item reamortize_survivors: Prepayment cash flow convention (default: TRUE).
+#'     TRUE treats SMM prepayments as full payoffs of a fraction of loans: the
+#'     surviving balance re-amortizes over the remaining term each month, so the
+#'     aggregate scheduled payment declines with the survival factor. This
+#'     matches market/Bloomberg pool conventions. When col_monthly_payment is
+#'     supplied, tape payments are scaled by the cumulative survival factor
+#'     instead. FALSE retains the legacy fixed-payment behavior, which treats
+#'     prepayments as curtailments (original dollar payment held constant),
+#'     accelerating scheduled principal and shortening effective life; retained
+#'     for backward compatibility only.
 #'   \item cpr_vec: Named vector of CPR rates by tier (default: c("default" = 0.0))
 #'   \item credit_cost_vec: Named vector of annual credit cost rates by tier (default: c("default" = 0.0))
 #'   \item pd_vec: Optional named vector of PD rates (overrides credit_cost_vec if provided)
@@ -155,6 +165,9 @@ calculate_cash_flows <- function(data, config = list()) {
     credit_loss_reduces_interest = FALSE,
     de_minimis_balance = 1.00,
 
+    # Prepayment cash flow convention
+    reamortize_survivors = TRUE,
+
     # Prepayment model: "tier_static" (default) or "linear_incentive"
     prepay_model = "tier_static",
 
@@ -178,6 +191,21 @@ calculate_cash_flows <- function(data, config = list()) {
     monthly_totals_group_vars = NULL,
     show_progress = TRUE
   )
+
+  # Guard against unnamed config elements before they're silently dropped
+  # by modifyList. The typical cause is '<-' used instead of '=' inside the
+  # list() call, e.g. list(reamortize_survivors <- FALSE, ...), which passes
+  # the VALUE as an anonymous element and assigns a stray variable in the
+  # caller's environment. The intended setting never reaches the engine and
+  # the default applies silently.
+  if (length(config) > 0 &&
+      (is.null(names(config)) || any(!nzchar(names(config))))) {
+    stop(
+      "config contains unnamed element(s), which would be silently ignored. ",
+      "Check for '<-' used instead of '=' inside the list() call. ",
+      "All config entries must be of the form name = value."
+    )
+  }
 
   # Merge user config with defaults
   cfg <- modifyList(default_config, config)
@@ -475,6 +503,15 @@ validate_config <- function(cfg, data) {
   if (cfg$de_minimis_balance < 0) {
     stop("de_minimis_balance must be non-negative. Got: ", cfg$de_minimis_balance)
   }
+  if (isTRUE(cfg$reamortize_survivors) &&
+      identical(cfg$interest_on_starting_balance, FALSE)) {
+    warning(
+      "reamortize_survivors = TRUE accrues interest on the starting balance ",
+      "by construction (the scheduled payment depends on interest, which ",
+      "would be circular on a post-prepay balance). ",
+      "interest_on_starting_balance = FALSE is ignored under this convention."
+    )
+  }
 
   # Validate CPR values (should be between 0 and 1)
   if (any(cfg$cpr_vec < 0) || any(cfg$cpr_vec > 1)) {
@@ -617,28 +654,26 @@ generate_single_loan_cash_flow <- function(loan_id,
   monthly_credit_cost <- cfg$credit_cost_vec[[tier]] / 12
   monthly_smm         <- 1 - (1 - cpr)^(1 / 12)   # SMM (CPR pre-resolved per loan)
 
-  # Scheduled payment calculation
+  # Base scheduled payment (original amortization; time-varying under
+  # reamortize_survivors, so per-month values are stored in a vector)
   use_monthly_payment <- !is.na(monthly_payment_val) && monthly_payment_val > 0
   if (use_monthly_payment) {
-    scheduled_payment <- monthly_payment_val
+    base_payment <- monthly_payment_val
+  } else if (monthly_rate == 0) {
+    base_payment <- principal / term
   } else {
-    if (monthly_rate == 0) {
-      scheduled_payment <- principal / term
-    } else {
-      scheduled_payment <- principal * monthly_rate / (1 - (1 + monthly_rate)^(-term))
-    }
+    base_payment <- principal * monthly_rate / (1 - (1 + monthly_rate)^(-term))
   }
 
   # Pre-computed payment dates: first payment one month AFTER the as-of date
   # (start_date is the settlement/valuation anchor, t = 0; payments are t = 1..term).
-  # Uses lubridate month arithmetic rather than seq.Date to handle month-ends:
-  # seq.Date from Jan 31 rolls to Mar 3; %m+% months() clamps to Feb 28/29.
   all_dates <- start_date %m+% months(seq_len(term))
 
   # Pre-allocated atomic accumulators (one slot per scheduled month)
   starting_balance_v    <- numeric(term)
   adjusted_balance_v    <- numeric(term)
   accrual_balance_v     <- numeric(term)
+  scheduled_payment_v   <- numeric(term)
   gross_interest_v      <- numeric(term)
   servicing_fee_v       <- numeric(term)
   reporting_fee_v       <- numeric(term)
@@ -652,6 +687,7 @@ generate_single_loan_cash_flow <- function(loan_id,
   balance     <- principal
   min_balance <- 0.01
   n_months    <- 0L
+  survival    <- 1.0   # cumulative surviving fraction (reamortize path)
 
   # Sequential balance roll-forward (each month depends on the prior)
   i <- 1L
@@ -661,30 +697,61 @@ generate_single_loan_cash_flow <- function(loan_id,
     # Cap credit loss at 100% of starting balance
     cl <- min(sb * monthly_credit_cost, sb)
 
-    # Prepayment capped at balance available after credit loss
-    max_prepay <- max(0, sb - cl)
-    pp <- min(sb * monthly_smm, max_prepay)
+    if (isTRUE(cfg$reamortize_survivors)) {
 
-    # Balance after prepayment and credit loss
-    ab <- max(0, sb - pp - cl)
+      # ---- Market convention: prepays are full payoffs; survivors keep
+      # ---- their own schedules, so the pool payment re-amortizes monthly.
+      n_rem <- term - i + 1L
+      pmt_i <- if (use_monthly_payment) {
+        base_payment * survival
+      } else if (monthly_rate == 0) {
+        sb / n_rem
+      } else {
+        sb * monthly_rate / (1 - (1 + monthly_rate)^(-n_rem))
+      }
 
-    # Balance used for interest and fees
-    acc <- if (cfg$interest_on_starting_balance) sb else ab
+      # Full-month interest on the starting balance (see validate_config:
+      # post-prepay accrual would be circular under this ordering)
+      acc <- sb
+      gi  <- acc * monthly_rate
+      sf  <- acc * monthly_servicing
+      rf  <- acc * monthly_reporting
+      tf  <- sf + rf
 
-    gi <- acc * monthly_rate
-    sf <- acc * monthly_servicing
-    rf <- acc * monthly_reporting
-    tf <- sf + rf
+      # Scheduled amortization first, SMM on the post-scheduled balance
+      sp <- max(0, pmt_i - gi)
+      sp <- min(sp, max(0, sb - cl))
+      pp <- max(0, sb - cl - sp) * monthly_smm
 
-    # Scheduled principal
-    sp <- max(0, scheduled_payment - gi)
-    sp <- min(sp, ab)
+      ab <- max(0, sb - pp - cl)      # column meaning unchanged vs legacy
+      tp <- sp + pp
+      rb <- max(0, sb - tp - cl)
 
-    # Total principal returned
-    tp <- min(sp + pp, ab)
+      survival <- survival * (1 - monthly_smm) *
+        (1 - (if (sb > 0) cl / sb else 0))
 
-    # Ending balance before de minimis adjustment
-    rb <- max(0, sb - tp - cl)
+    } else {
+
+      # ---- Legacy fixed-payment (curtailment) convention: unchanged ----
+      max_prepay <- max(0, sb - cl)
+      pp <- min(sb * monthly_smm, max_prepay)
+
+      ab <- max(0, sb - pp - cl)
+
+      acc <- if (cfg$interest_on_starting_balance) sb else ab
+
+      gi <- acc * monthly_rate
+      sf <- acc * monthly_servicing
+      rf <- acc * monthly_reporting
+      tf <- sf + rf
+
+      pmt_i <- base_payment
+      sp <- max(0, pmt_i - gi)
+      sp <- min(sp, ab)
+
+      tp <- min(sp + pp, ab)
+      rb <- max(0, sb - tp - cl)
+    }
 
     # De minimis handling
     if (rb > 0 && rb < cfg$de_minimis_balance) {
@@ -695,6 +762,7 @@ generate_single_loan_cash_flow <- function(loan_id,
     starting_balance_v[i]    <- sb
     adjusted_balance_v[i]    <- ab
     accrual_balance_v[i]     <- acc
+    scheduled_payment_v[i]   <- pmt_i
     gross_interest_v[i]      <- gi
     servicing_fee_v[i]       <- sf
     reporting_fee_v[i]       <- rf
@@ -754,7 +822,7 @@ generate_single_loan_cash_flow <- function(loan_id,
     starting_balance    = starting_balance_v[idx],
     adjusted_balance    = adjusted_balance_v[idx],
     accrual_balance     = accrual_balance_v[idx],
-    scheduled_payment   = scheduled_payment,
+    scheduled_payment   = scheduled_payment_v[idx],
     gross_interest      = gi,
     servicing_fee_amt   = servicing_fee_v[idx],
     reporting_fee_amt   = reporting_fee_v[idx],
