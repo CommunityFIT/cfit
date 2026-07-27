@@ -30,6 +30,10 @@
 #'   "What convexity would this portfolio have if borrowers didn't change
 #'   prepayment behavior?"
 #'
+#' @param validate_month_index Logical. If TRUE (default), errors when the month
+#'   column does not begin at 1 or is not contiguous. Set FALSE to analyse a
+#'   deliberately offset or filtered projection window.
+#'
 #' @return A single-row data frame with portfolio-level metrics:
 #'   \itemize{
 #'     \item portfolio_pv: Total present value of all cash flows
@@ -42,9 +46,9 @@
 #' @details
 #' All calculations use monthly compounding. Present values are computed as:
 #' PV_t = CF_t / (1 + y/12)^t, where y is the annual discount rate and t is
-#' time in months from eff_date. The month column is treated as the projection
-#' index, where month = 1 corresponds to time 0 (the effective date). Timing
-#' calculations use t = (month - 1) / 12 for conversion to years.
+#' time in months from eff_date. The month column is the projection index: month = 1
+#' is the first projected cash flow, falling one month after eff_date,
+#' so t = month months and t_years = month / 12.
 #'
 #' Duration measures the weighted average time until cash flows are received,
 #' expressed in years. Modified duration approximates the percentage change in
@@ -83,7 +87,9 @@
 calculate_duration <- function(loan_cash_flows,
                                discount_rate = NULL,
                                cash_flow_column = "total_payment",
-                               include_convexity = FALSE) {
+                               include_convexity = FALSE,
+                               validate_month_index = TRUE
+                               ) {
 
   # Input validation ----
   if (!is.data.frame(loan_cash_flows)) {
@@ -113,6 +119,10 @@ calculate_duration <- function(loan_cash_flows,
 
   if (!is.logical(include_convexity) || length(include_convexity) != 1) {
     stop("include_convexity must be TRUE or FALSE")
+  }
+
+  if (!is.logical(validate_month_index) || length(validate_month_index) != 1) {
+    stop("validate_month_index must be TRUE or FALSE")
   }
 
   # Ensure required columns are not all NA
@@ -149,11 +159,35 @@ calculate_duration <- function(loan_cash_flows,
 
   # Validate month column ----
   if (any(duration_data$month < 1, na.rm = TRUE)) {
-    stop("month column contains values less than 1. Month must be >= 1 (month = 1 corresponds to time 0)")
+    stop("month column contains values less than 1. Month must be >= 1")
   }
 
   if (any(duration_data$month != floor(duration_data$month), na.rm = TRUE)) {
     stop("month column contains non-integer values. Month must be an integer >= 1")
+  }
+
+  # Projection-index guard ----
+  # Checked on the raw input, not the NA-filtered frame: a dropped row must not
+  # be able to shift the apparent start of the index.
+  if (validate_month_index) {
+    observed <- sort(unique(loan_cash_flows$month[!is.na(loan_cash_flows$month)]))
+
+    if (min(observed) != 1) {
+      stop("month index starts at ", min(observed), ", expected 1. ",
+           "As of v0.2.5.1 the month = 1 -> t = 1 month convention is handled ",
+           "internally. If this reflects the mutate(month = month + 1) workaround ",
+           "for the pre-v0.2.5.1 timing bug, remove it. To analyse a deliberately ",
+           "offset or filtered projection, set validate_month_index = FALSE.")
+    }
+
+    expected <- seq_len(max(observed))
+    if (length(observed) != length(expected) || any(observed != expected)) {
+      gaps <- setdiff(expected, observed)
+      stop("month index is not contiguous from 1. Missing month(s): ",
+           paste(gaps[seq_len(min(10L, length(gaps)))], collapse = ", "),
+           if (length(gaps) > 10L) ", ..." else "",
+           ". Set validate_month_index = FALSE to override.")
+    }
   }
 
   # Determine discount rate to use for each loan
@@ -170,7 +204,7 @@ calculate_duration <- function(loan_cash_flows,
   # Calculate time periods using month column and present values with monthly compounding ----
   duration_data <- duration_data %>%
     mutate(
-      t_months = month - 1,
+      t_months = month,
       t_years = t_months / 12,
 
       # Present value calculation using monthly compounding

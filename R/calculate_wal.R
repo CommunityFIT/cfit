@@ -16,6 +16,9 @@
 #'     \item "investor_principal": Investor's share of principal cash flows
 #'       after applying investor_share percentage
 #'   }
+#' @param validate_month_index Logical. If TRUE (default), errors when the month
+#'   column does not begin at 1 or is not contiguous. Set FALSE to analyse a
+#'   deliberately offset or filtered projection window.
 #'
 #' @return A single-row data frame with portfolio-level metric:
 #'   \itemize{
@@ -29,9 +32,8 @@
 #' repayment.
 #'
 #' Time measurement: The month column is treated as the projection index, where
-#' month = 1 corresponds to time 0 (the effective date). Timing calculations use
-#' t = (month - 1) / 12. This means month = 1 has t = 0 years, month = 2 has
-#' t = 1/12 years (one month from eff_date), and so on.
+#' month = 1 is the first projected principal payment, one month after eff_date.
+#' Timing uses t = month / 12, so month = 1 has t = 1/12 years and month = 12 has t = 1 year.
 #'
 #' The function calculates:
 #' \itemize{
@@ -63,7 +65,9 @@
 #' @importFrom stats weighted.mean
 #' @export
 calculate_wal <- function(loan_cash_flows,
-                          principal_column = "total_principal") {
+                          principal_column = "total_principal",
+                          validate_month_index = TRUE
+                          ) {
 
   # Input validation ----
   if (!is.data.frame(loan_cash_flows)) {
@@ -80,6 +84,10 @@ calculate_wal <- function(loan_cash_flows,
 
   if (!principal_column %in% c("total_principal", "investor_principal")) {
     stop("principal_column must be either 'total_principal' or 'investor_principal'")
+  }
+
+  if (!is.logical(validate_month_index) || length(validate_month_index) != 1) {
+    stop("validate_month_index must be TRUE or FALSE")
   }
 
   # Ensure required columns are not all NA
@@ -115,17 +123,40 @@ calculate_wal <- function(loan_cash_flows,
 
   # Validate month column ----
   if (any(wal_data$month < 1, na.rm = TRUE)) {
-    stop("month column contains values less than 1. Month must be >= 1 (month = 1 corresponds to time 0)")
+    stop("month column contains values less than 1. Month must be >= 1")
   }
 
   if (any(wal_data$month != floor(wal_data$month), na.rm = TRUE)) {
     stop("month column contains non-integer values. Month must be an integer >= 1")
   }
+  # Projection-index guard ----
+  # Checked on the raw input, not the NA-filtered frame: a dropped row must not
+  # be able to shift the apparent start of the index.
+  if (validate_month_index) {
+    observed <- sort(unique(loan_cash_flows$month[!is.na(loan_cash_flows$month)]))
+
+    if (min(observed) != 1) {
+      stop("month index starts at ", min(observed), ", expected 1. ",
+           "As of v0.2.5.1 the month = 1 -> t = 1 month convention is handled ",
+           "internally. If this reflects the mutate(month = month + 1) workaround ",
+           "for the pre-v0.2.5.1 timing bug, remove it. To analyse a deliberately ",
+           "offset or filtered projection, set validate_month_index = FALSE.")
+    }
+
+    expected <- seq_len(max(observed))
+    if (length(observed) != length(expected) || any(observed != expected)) {
+      gaps <- setdiff(expected, observed)
+      stop("month index is not contiguous from 1. Missing month(s): ",
+           paste(gaps[seq_len(min(10L, length(gaps)))], collapse = ", "),
+           if (length(gaps) > 10L) ", ..." else "",
+           ". Set validate_month_index = FALSE to override.")
+    }
+  }
 
   # Calculate time periods using month column ----
   wal_data <- wal_data %>%
     mutate(
-      t_months = month - 1,
+      t_months = month,
       t_years = t_months / 12,
       weighted_principal = t_years * .data[[principal_column]]
     )

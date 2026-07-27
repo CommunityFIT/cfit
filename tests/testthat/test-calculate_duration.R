@@ -433,25 +433,21 @@ test_that("calculate_duration correctly uses month column for time calculation",
   )
 
   result <- calculate_duration(cash_flows)
-
-  # With monthly compounding and t_months = month - 1:
-  # Month 1: t_months = 0, t_years = 0
-  # Month 2: t_months = 1, t_years = 1/12
-  # Month 3: t_months = 2, t_years = 2/12
-
-  # PV calculations with y = 0.06 annual, monthly compounding:
-  # PV1 = 100 / (1 + 0.06/12)^0 = 100
-  # PV2 = 100 / (1 + 0.06/12)^1 = 100 / 1.005 ≈ 99.502
-  # PV3 = 100 / (1 + 0.06/12)^2 = 100 / 1.010025 ≈ 99.007
-
-  # Macaulay Duration = (0*100 + 1/12*99.502 + 2/12*99.007) / (100 + 99.502 + 99.007)
-  pv1 <- 100
-  pv2 <- 100 / (1.005)
-  pv3 <- 100 / (1.005^2)
+  # Monthly compounding, t_months = month (month 1 = one month after eff_date):
+  #   Month 1: t = 1 month = 1/12 yr
+  #   Month 2: t = 2 months = 2/12 yr
+  #   Month 3: t = 3 months = 3/12 yr
+  # y = 0.06 annual -> i = 0.005 monthly
+  #   PV1 = 100 / 1.005   ~ 99.502
+  #   PV2 = 100 / 1.005^2 ~ 99.007
+  #   PV3 = 100 / 1.005^3 ~ 98.515
+  # Macaulay = (1/12*PV1 + 2/12*PV2 + 3/12*PV3) / (PV1 + PV2 + PV3)
+  pv1 <- 100 / 1.005
+  pv2 <- 100 / (1.005^2)
+  pv3 <- 100 / (1.005^3)
   total_pv <- pv1 + pv2 + pv3
-  expected_duration <- (0 * pv1 + (1/12) * pv2 + (2/12) * pv3) / total_pv
-
-  expect_equal(result$macaulay_duration, expected_duration, tolerance = 0.001)
+  expected_duration <- ((1/12) * pv1 + (2/12) * pv2 + (3/12) * pv3) / total_pv
+  expect_equal(result$macaulay_duration, expected_duration, tolerance = 1e-10)
 })
 
 # Test 25: Monthly compounding vs annual compounding comparison ----

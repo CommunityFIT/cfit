@@ -226,13 +226,11 @@ test_that("calculate_wal is correct for equal principal payments", {
   )
 
   result <- calculate_wal(cash_flows)
-
-  # For equal payments over 12 months, using t = (month - 1) / 12:
-  # WAL = (0*100 + 1/12*100 + 2/12*100 + ... + 11/12*100) / (12*100)
-  # WAL = sum(0:11) / 12 / 12 = 66 / 144 = 0.458333 years
-  expected_wal <- sum(0:11) / 12 / 12
-
-  expect_equal(result$portfolio_wal, expected_wal, tolerance = 0.001)
+  # For equal payments over 12 months, using t = month / 12:
+  # WAL = (1/12*100 + 2/12*100 + ... + 12/12*100) / (12*100)
+  # WAL = sum(1:12) / 12 / 12 = 78 / 144 = 0.541667 years
+  expected_wal <- sum(1:12) / 12 / 12
+  expect_equal(result$portfolio_wal, expected_wal, tolerance = 1e-10)
 })
 
 # Test 14: WAL with front-loaded principal (bullet at start) ----
@@ -385,39 +383,38 @@ test_that("calculate_wal handles zero principal in some periods", {
   )
 
   result <- calculate_wal(cash_flows)
-
   expect_s3_class(result, "data.frame")
-  expect_true(result$portfolio_wal > 0)
-
-  # With t = (month - 1) / 12, first payment is at month 4, which is t = 3/12 = 0.25
-  expect_true(result$portfolio_wal > 0.25)
+  # No principal until month 4, so the earliest possible WAL is t = 4/12
+  expect_true(result$portfolio_wal >= 4/12)
+  # Equal principal over months 4-12: WAL = mean(4:12)/12 = 8/12
+  expect_equal(result$portfolio_wal, mean(4:12) / 12, tolerance = 1e-10)
 })
 
 # Test 21: Portfolio with varying loan sizes ----
 test_that("calculate_wal properly weights loans by principal amount", {
-  # Small loan with short WAL
-  # Large loan with long WAL
+  # SMALL amortizes over 6 months; LARGE over 12. Different WALs, and LARGE
+  # carries ~200x the principal, so portfolio WAL must sit close to LARGE's.
   cash_flows <- data.frame(
-    LOAN_ID = rep(c("SMALL", "LARGE"), each = 12),
+    LOAN_ID  = c(rep("SMALL", 6), rep("LARGE", 12)),
     eff_date = as.Date("2024-01-01"),
-    date = rep(seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12), 2),
-    month = rep(1:12, 2),
-    total_principal = c(
-      rep(10, 12),    # Small loan: $10/month
-      rep(1000, 12)   # Large loan: $1000/month (100x larger)
-    ),
-    investor_principal = c(
-      rep(9.5, 12),
-      rep(950, 12)
-    )
+    date     = c(seq.Date(as.Date("2024-02-01"), by = "month", length.out = 6),
+                 seq.Date(as.Date("2024-02-01"), by = "month", length.out = 12)),
+    month    = c(1:6, 1:12),
+    total_principal    = c(rep(10, 6),  rep(1000, 12)),
+    investor_principal = c(rep(9.5, 6), rep(950, 12))
   )
-
   result <- calculate_wal(cash_flows)
 
-  # Since both have same schedule, WAL should be same as equal payment WAL
-  expected_wal <- sum(0:11) / 12 / 12
+  wal_small <- mean(1:6)  / 12          # 3.5/12
+  wal_large <- mean(1:12) / 12          # 6.5/12
+  p_small   <- 10 * 6                   # 60
+  p_large   <- 1000 * 12                # 12000
 
-  expect_equal(result$portfolio_wal, expected_wal, tolerance = 0.001)
+  expected_wal <- (wal_small * p_small + wal_large * p_large) / (p_small + p_large)
+  expect_equal(result$portfolio_wal, expected_wal, tolerance = 1e-10)
+
+  # Weighting must pull the result toward LARGE, not to the unweighted mean
+  expect_true(result$portfolio_wal > mean(c(wal_small, wal_large)))
 })
 
 # Test 22: Time calculation using month column ----
@@ -432,12 +429,8 @@ test_that("calculate_wal correctly uses month column for time calculation", {
   )
 
   result <- calculate_wal(cash_flows)
-
-  # Manual calculation:
-  # t_years for months 1,2,3 = (0, 1/12, 2/12)
-  # WAL = (0*100 + 1/12*100 + 2/12*100) / 300
-  # WAL = (0 + 100/12 + 200/12) / 300 = (300/12) / 300 = 25 / 300 = 1/12 = 0.08333
-  expected_wal <- (0 + 1/12 + 2/12) / 3
-
-  expect_equal(result$portfolio_wal, expected_wal, tolerance = 0.001)
+  # t_years for months 1, 2, 3 = (1/12, 2/12, 3/12)
+  # WAL = (1/12*100 + 2/12*100 + 3/12*100) / 300 = (6/12) / 3 = 1/6
+  expected_wal <- (1/12 + 2/12 + 3/12) / 3
+  expect_equal(result$portfolio_wal, expected_wal, tolerance = 1e-10)
 })
