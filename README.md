@@ -267,12 +267,12 @@ duration_results <- calculate_duration(
 
 print(duration_results)
 #portfolio_pv macaulay_duration modified_duration analytical_convexity
-#      88867.3           1.64498          1.636546             3.951401
+#     88341.55          1.861414           1.85187             5.037683
 
 # Interpretation:
-# - Macaulay Duration (1.65 years): Average time to receive cash flows
-# - Modified Duration (1.64): Portfolio value changes ~1.64% for 1% rate change
-# - Convexity (3.95): Measures curvature of price-yield relationship
+# - Macaulay Duration (1.86 years): Average time to receive cash flows
+# - Modified Duration (1.85): Portfolio value changes ~1.85% for 1% rate change
+# - Convexity (5.04): Measures curvature of price-yield relationship
 ```
 
 **Weighted Average Life Analysis**
@@ -286,10 +286,10 @@ wal_results <- calculate_wal(
 
 print(wal_results)
 # portfolio_wal
-#      1.78
+#      2.020745
 
 # Interpretation: 
-# Principal is repaid in an average of 1.78 years
+# Principal is repaid in an average of 2.02 years
 ```
 
 **Compare Gross vs Net Metrics**

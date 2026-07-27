@@ -1,3 +1,78 @@
+# cfit 0.2.5.1
+
+## Bug fixes
+
+* **`calculate_duration()` and `calculate_wal()` now interpret the `month`
+  column correctly.** Both treated `month = 1` as t = 0 and computed
+  `t = (month - 1) / 12`, discounting every projected cash flow one period
+  too few. The `month` column is the projection index: `month = 1` is the
+  first projected cash flow, falling one month after `eff_date`. Timing is
+  now `t = month / 12`.
+
+  This is a correction, not a modeling choice. The v0.2.5 changes moved
+  numbers deliberately; these numbers were wrong.
+
+  The correction is a uniform one-period shift, so its magnitude is exact
+  and independently verifiable:
+
+  - `portfolio_pv` falls by a factor of `1 / (1 + y/12)` — approximately
+    42 bps at a 5.14% annual yield
+  - `macaulay_duration` and `modified_duration` each rise by exactly
+    1/12 year (0.0833)
+  - `portfolio_wal` rises by exactly 1/12 year
+  - `analytical_convexity` rises by `2 * D / ((1 + y/12)^2 * 144)`, where
+    `D` is the corrected Macaulay duration in months
+
+  Users can confirm their own figures moved by exactly these amounts.
+  Under a scalar `discount_rate` the relationships are exact; under
+  `discount_rate = NULL` they are approximate, because loan-level PV
+  weights shift when each loan discounts at its own rate.
+
+* **Scope.** Introduced in v0.2.5, which moved the first payment date to
+  one month after the as-of date without updating the timing convention in
+  `calculate_duration()` and `calculate_wal()`. Output from v0.2.4 and
+  earlier is unaffected: those functions were correct for the engine they
+  were written against. Only figures produced with v0.2.5 need restating.
+
+* **Corrected documentation.** The `@details` sections of both functions
+  stated `month = 1` corresponds to time 0 — a convention the engine has
+  not emitted since v0.2.5, and which contradicted the v0.2.5 release
+  notes. Error messages carrying the same claim have been corrected.
+
+## New
+
+* **`validate_month_index` argument** (default `TRUE`) on both functions.
+  Errors when the `month` index does not begin at 1 or is not contiguous.
+  Analysis code written against v0.2.5 may carry a
+  `mutate(month = month + 1)` workaround; left in place it now
+  double-shifts, understating PV by roughly 40 bps — a plausible-looking
+  error. The guard makes that failure loud, and its message names the
+  workaround as the likely cause. Set `FALSE` to analyze a deliberately
+  offset or filtered projection window.
+
+## Other changes
+
+* README example outputs regenerated. These were last produced under
+  v0.2.4 and so reflect both the v0.2.5 cash flow conventions and this
+  timing correction. WAL moves from 1.78 to 2.020745: approximately 0.157
+  from the v0.2.5 conventions and exactly 1/12 from the timing fix.
+  Duration and convexity move for the same two reasons.
+
+## Validation
+
+* Timing convention pinned by absolute unit tests — hand-computed
+  expectations on small cash flow tables, independent of the
+  implementation — rather than by shift comparisons, which are
+  equivariant under the bug and cannot detect it.
+* Golden masters frozen for both functions at 1e-8 across five duration
+  cases (scalar and loan-level discount rates, both cash flow columns,
+  convexity on and off) and two WAL cases, over a frozen input table. The
+  input is frozen rather than regenerated, so engine changes cannot move
+  these expectations.
+* A reversal guard recomputes the frozen PV and Macaulay duration from
+  first principles, so re-freezing under a reverted convention fails.
+* Full suite: 302 assertions passing before the golden additions.
+
 # cfit 0.2.5
 
 ## Significant Changes
