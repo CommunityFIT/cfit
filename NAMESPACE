@@ -6,22 +6,28 @@ export(calculate_prepay_speed)
 export(calculate_wal)
 import(dplyr)
 import(lubridate)
-importFrom(dplyr,across)
-importFrom(dplyr,all_of)
-importFrom(dplyr,arrange)
-importFrom(dplyr,bind_rows)
-importFrom(dplyr,distinct)
-importFrom(dplyr,group_by)
-importFrom(dplyr,if_else)
-importFrom(dplyr,left_join)
-importFrom(dplyr,mutate)
-importFrom(dplyr,select)
-importFrom(dplyr,summarise)
+importFrom(dplyr,
+  across,
+  all_of,
+  arrange,
+  bind_rows,
+  distinct,
+  group_by,
+  if_else,
+  left_join,
+  mutate,
+  select,
+  summarise
+)
 importFrom(lubridate,"%m+%")
 importFrom(purrr,pmap)
-importFrom(stats,median)
-importFrom(stats,setNames)
-importFrom(stats,weighted.mean)
+importFrom(stats,
+  median,
+  setNames,
+  weighted.mean
+)
 importFrom(tibble,tibble)
-importFrom(utils,head)
-importFrom(utils,modifyList)
+importFrom(utils,
+  head,
+  modifyList
+)

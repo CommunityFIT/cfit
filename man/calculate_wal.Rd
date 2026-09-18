@@ -4,7 +4,11 @@
 \alias{calculate_wal}
 \title{Calculate Portfolio Weighted Average Life (WAL)}
 \usage{
-calculate_wal(loan_cash_flows, principal_column = "total_principal")
+calculate_wal(
+  loan_cash_flows,
+  principal_column = "total_principal",
+  validate_month_index = TRUE
+)
 }
 \arguments{
 \item{loan_cash_flows}{Data frame. Output from \code{calculate_cash_flows()}
@@ -19,6 +23,10 @@ of ownership structure
 \item "investor_principal": Investor's share of principal cash flows
 after applying investor_share percentage
 }}
+
+\item{validate_month_index}{Logical. If TRUE (default), errors when the month
+column does not begin at 1 or is not contiguous. Set FALSE to analyse a
+deliberately offset or filtered projection window.}
 }
 \value{
 A single-row data frame with portfolio-level metric:
@@ -39,9 +47,8 @@ to interest rates—it purely reflects the timing and amount of principal
 repayment.
 
 Time measurement: The month column is treated as the projection index, where
-month = 1 corresponds to time 0 (the effective date). Timing calculations use
-t = (month - 1) / 12. This means month = 1 has t = 0 years, month = 2 has
-t = 1/12 years (one month from eff_date), and so on.
+month = 1 is the first projected principal payment, one month after eff_date.
+Timing uses t = month / 12, so month = 1 has t = 1/12 years and month = 12 has t = 1 year.
 
 The function calculates:
 \itemize{

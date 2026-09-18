@@ -8,7 +8,8 @@ calculate_duration(
   loan_cash_flows,
   discount_rate = NULL,
   cash_flow_column = "total_payment",
-  include_convexity = FALSE
+  include_convexity = FALSE,
+  validate_month_index = TRUE
 )
 }
 \arguments{
@@ -40,6 +41,10 @@ assumes cash flows are held constant; convexity reflects discounting effects
 only and does not incorporate rate-dependent prepayment behavior. It answers
 "What convexity would this portfolio have if borrowers didn't change
 prepayment behavior?"}
+
+\item{validate_month_index}{Logical. If TRUE (default), errors when the month
+column does not begin at 1 or is not contiguous. Set FALSE to analyse a
+deliberately offset or filtered projection window.}
 }
 \value{
 A single-row data frame with portfolio-level metrics:
@@ -59,9 +64,9 @@ convexity for a loan portfolio based on projected cash flows from
 \details{
 All calculations use monthly compounding. Present values are computed as:
 PV_t = CF_t / (1 + y/12)^t, where y is the annual discount rate and t is
-time in months from eff_date. The month column is treated as the projection
-index, where month = 1 corresponds to time 0 (the effective date). Timing
-calculations use t = (month - 1) / 12 for conversion to years.
+time in months from eff_date. The month column is the projection index: month = 1
+is the first projected cash flow, falling one month after eff_date,
+so t = month months and t_years = month / 12.
 
 Duration measures the weighted average time until cash flows are received,
 expressed in years. Modified duration approximates the percentage change in
