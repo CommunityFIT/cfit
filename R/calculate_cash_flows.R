@@ -13,8 +13,12 @@ utils::globalVariables(c(
 #' Generates monthly cash flow projections for a loan portfolio, incorporating
 #' user-defined prepayment speeds (CPR), credit costs, and various fee structures.
 #'
-#' @param data A data frame containing loan portfolio snapshot data
-#' @param config A list of configuration parameters. See details for structure.
+#' @param data A non-empty data frame containing one snapshot row per loan.
+#'   Required numeric fields must be finite and non-missing; balances must be
+#'   positive, rates non-negative, and terms positive integers. Dates must be
+#'   valid and non-missing. Invalid records raise an error rather than being skipped.
+#' @param config A named list of configuration parameters. Unknown, duplicate,
+#'   or unnamed entries raise an error. See details for structure.
 #'
 #' @return Depending on return_monthly_totals setting:
 #'   \itemize{
@@ -33,6 +37,27 @@ utils::globalVariables(c(
 #'   }
 #'
 #' @details
+#' Loan IDs must be unique and non-missing. If the implicit default LOAN_ID
+#' column is absent, or col_loanid is NULL, sequential IDs are generated.
+#' Every explicitly requested column must exist, including col_loanid.
+#'
+#' Assumption vectors must have unique, non-empty tier names and finite values.
+#' Probability and credit-cost values must be in `[0, 1]`. PD and LGD must be
+#' supplied together, cover the same tiers, and are multiplied by matching name,
+#' regardless of vector order. Effective credit costs must cover all tiers in
+#' the active prepayment model. Without col_tier, a named "default" tier is
+#' required. Unknown or missing loan tiers use that same named default for both
+#' prepayment and credit costs, with a warning; without it, they raise an error.
+#' The output tier records the resolved assumption tier. The first vector entry
+#' is never used as an implicit default.
+#'
+#' Optional payment and original-balance columns must be numeric. NA values
+#' request the calculated payment or current-balance fallback for that loan;
+#' other supplied values must be finite and positive. Scalar settings must have
+#' the documented numeric or logical type. Rates above 1 still warn without
+#' automatic conversion. Validation does not add support for balloon payments
+#' or negative amortization.
+#'
 #' Configuration list structure:
 #' \itemize{
 #'   \item col_loanid: Column name for loan identifier (default: "LOAN_ID")
@@ -192,114 +217,75 @@ calculate_cash_flows <- function(data, config = list()) {
     show_progress = TRUE
   )
 
-  # Guard against unnamed config elements before they're silently dropped
-  # by modifyList. The typical cause is '<-' used instead of '=' inside the
-  # list() call, e.g. list(reamortize_survivors <- FALSE, ...), which passes
-  # the VALUE as an anonymous element and assigns a stray variable in the
-  # caller's environment. The intended setting never reaches the engine and
-  # the default applies silently.
-  if (length(config) > 0 &&
-      (is.null(names(config)) || any(!nzchar(names(config))))) {
-    stop(
-      "config contains unnamed element(s), which would be silently ignored. ",
-      "Check for '<-' used instead of '=' inside the list() call. ",
-      "All config entries must be of the form name = value."
-    )
-  }
+  validate_cash_flow_inputs(data, config, names(default_config))
+  # Keep explicit NULLs so invalid required settings cannot disappear in merging.
+  cfg <- modifyList(default_config, config, keep.null = TRUE)
+  cfg <- validate_cash_flow_config(cfg)
 
-  # Merge user config with defaults
-  cfg <- modifyList(default_config, config)
-
-  # Validate configuration
-  validate_config(cfg, data)
-
-  # Validate prepay_model
-  if (!cfg$prepay_model %in% c("tier_static", "linear_incentive")) {
-    stop("prepay_model must be 'tier_static' or 'linear_incentive'. Got: '",
-         cfg$prepay_model, "'")
-  }
-
-  # Validate required columns exist
   required_cols <- c(cfg$col_balance, cfg$col_rate, cfg$col_term, cfg$col_start_date)
   missing_cols <- setdiff(required_cols, names(data))
-
   if (length(missing_cols) > 0) {
-    stop(
-      "Missing required columns in data: ", paste(missing_cols, collapse = ", "),
-      "\n\nExpected columns based on config:",
-      "\n  - Balance: '", cfg$col_balance, "'",
-      "\n  - Rate: '", cfg$col_rate, "'",
-      "\n  - Term: '", cfg$col_term, "'",
-      "\n  - Start Date: '", cfg$col_start_date, "'",
-      "\n\nPlease check your column names or update the config parameter."
-    )
+    stop("Missing required columns in data: ", paste(missing_cols, collapse = ", "))
   }
-
-  # Add LOAN_ID if missing
+  optional_mappings <- c("col_tier", "col_monthly_payment", "col_orig_balance")
+  # An explicitly requested identifier must exist. Automatic IDs remain available
+  # when col_loanid is NULL or the implicit LOAN_ID column is absent.
+  if ("col_loanid" %in% names(config)) {
+    optional_mappings <- c(optional_mappings, "col_loanid")
+  }
+  for (nm in optional_mappings) {
+    if (!is.null(cfg[[nm]]) && !cfg[[nm]] %in% names(data)) {
+      stop(nm, " specifies missing column '", cfg[[nm]], "'.")
+    }
+  }
   if (is.null(cfg$col_loanid) || !cfg$col_loanid %in% names(data)) {
     data$LOAN_ID <- seq_len(nrow(data))
     cfg$col_loanid <- "LOAN_ID"
   }
+  data <- validate_cash_flow_data(data, cfg)
 
-  # Validate and clean data (returns mutated data frame)
-  data <- validate_data(data, cfg)
-
-  # Check if tier column exists
-  has_tier <- !is.null(cfg$col_tier) && cfg$col_tier %in% names(data)
-
-  # If PD and LGD provided, calculate credit costs
-  if (!is.null(cfg$pd_vec) && !is.null(cfg$lgd_vec)) {
+  if (!is.null(cfg$pd_vec)) {
     if (!is.null(config$credit_cost_vec)) {
-      warning(
-        "Both credit_cost_vec and pd_vec/lgd_vec provided. ",
-        "Using PD/LGD approach (credit_cost = PD * LGD). ",
-        "The credit_cost_vec will be ignored."
-      )
+      warning("Both credit_cost_vec and pd_vec/lgd_vec provided. ",
+              "Using PD/LGD approach (credit_cost = PD * LGD). ",
+              "The credit_cost_vec will be ignored.")
     }
-    # Override credit_cost_vec with PD * LGD
-    tier_names <- names(cfg$pd_vec)
-    cfg$credit_cost_vec <- setNames(
-      cfg$pd_vec * cfg$lgd_vec,
-      tier_names
-    )
+    # Match by tier name, never by the position of a vector element.
+    cfg$credit_cost_vec <- cfg$pd_vec * cfg$lgd_vec[names(cfg$pd_vec)]
+    validate_cash_flow_vector(cfg$credit_cost_vec, "derived credit_cost_vec")
   }
 
-  # First tier as default. For linear_incentive the prepay tiers live in
-  # base_cpr_vec rather than cpr_vec.
-  default_tier <- if (cfg$prepay_model == "linear_incentive") {
-    names(cfg$base_cpr_vec)[1]
-  } else {
-    names(cfg$cpr_vec)[1]
-  }
   prepay_tier_names <- if (cfg$prepay_model == "linear_incentive") {
     names(cfg$base_cpr_vec)
   } else {
     names(cfg$cpr_vec)
   }
-
-  # Credit costs must cover the default tier, or the engine's tier fallback
-  # would fail (credit cost is looked up by tier regardless of prepay model).
-  if (!default_tier %in% names(cfg$credit_cost_vec)) {
-    stop("Default tier '", default_tier, "' is not present in credit_cost_vec ",
-         "(or the derived PD*LGD vector). Define credit cost for all tiers.")
+  missing_credit <- setdiff(prepay_tier_names, names(cfg$credit_cost_vec))
+  if (length(missing_credit) > 0) {
+    stop("credit_cost_vec (or derived PD*LGD) must cover all prepayment tiers. ",
+         "Missing: ", paste(missing_credit, collapse = ", "))
   }
 
-  # Validate tier values if tier column exists
-  if (has_tier) {
-    unique_tiers <- unique(data[[cfg$col_tier]])
-    missing_tiers <- setdiff(unique_tiers, prepay_tier_names)
-
-    if (length(missing_tiers) > 0) {
-      warning(
-        "The following tier values are not in cpr_vec/credit_cost_vec: ",
-        paste(missing_tiers, collapse = ", "),
-        ". Using first tier '", default_tier, "' as default for these loans."
-      )
+  default_tier <- "default"
+  has_tier <- !is.null(cfg$col_tier)
+  if (!has_tier && !default_tier %in% prepay_tier_names) {
+    stop("When col_tier is NULL, prepayment and credit-cost vectors ",
+         "must contain a 'default' tier.")
+  }
+  tiers <- if (has_tier) as.character(data[[cfg$col_tier]]) else
+    rep(default_tier, nrow(data))
+  unknown <- !tiers %in% prepay_tier_names
+  if (any(unknown)) {
+    unknown_labels <- unique(tiers[unknown])
+    unknown_labels[is.na(unknown_labels)] <- "<NA>"
+    msg <- paste0("Unknown or missing loan tiers: ",
+                  paste(unknown_labels, collapse = ", "), ". ")
+    if (!default_tier %in% prepay_tier_names) {
+      stop(msg, "Define a 'default' tier in the assumption vectors or correct the data.")
     }
+    warning(msg, "Using the named 'default' tier for prepayment and credit costs.")
+    tiers[unknown] <- default_tier
   }
-
-  # Resolve per-loan annual CPR via the configured prepayment model.
-  # Keystone for v0.2.4: CPR becomes a per-loan input to the engine.
   cpr_per_loan <- resolve_prepay_cpr(data, cfg, default_tier)
 
   # Show progress for large portfolios
@@ -315,7 +301,7 @@ calculate_cash_flows <- function(data, config = list()) {
       rate = data[[cfg$col_rate]],
       term = data[[cfg$col_term]],
       start_date = data[[cfg$col_start_date]],
-      tier = if (has_tier) data[[cfg$col_tier]] else default_tier,
+      tier = tiers,
       cpr = cpr_per_loan,
       monthly_payment_val = if (!is.null(cfg$col_monthly_payment)) data[[cfg$col_monthly_payment]] else NA_real_,
       origbalance = if (!is.null(cfg$col_orig_balance)) data[[cfg$col_orig_balance]] else NA_real_
@@ -400,215 +386,6 @@ calculate_cash_flows <- function(data, config = list()) {
   } else {
     return(loan_cash_flows)
   }
-}
-
-
-# Validation helper function
-validate_config <- function(cfg, data) {
-
-  # Check that vectors have matching names if both PD and LGD provided
-  if (!is.null(cfg$pd_vec) && !is.null(cfg$lgd_vec)) {
-    if (!identical(names(cfg$pd_vec), names(cfg$lgd_vec))) {
-      stop(
-        "pd_vec and lgd_vec must have identical tier names.\n",
-        "pd_vec tiers: ", paste(names(cfg$pd_vec), collapse = ", "), "\n",
-        "lgd_vec tiers: ", paste(names(cfg$lgd_vec), collapse = ", ")
-      )
-    }
-  }
-
-  # Validate prepay_model
-  if (!cfg$prepay_model %in% c("tier_static", "linear_incentive")) {
-    stop("prepay_model must be 'tier_static' or 'linear_incentive'. Got: '",
-         cfg$prepay_model, "'")
-  }
-
-  # Prepayment-model-specific validation
-  if (cfg$prepay_model == "tier_static") {
-
-    # Check that cpr_vec and credit_cost_vec have matching names
-    if (!identical(names(cfg$cpr_vec), names(cfg$credit_cost_vec))) {
-      warning(
-        "cpr_vec and credit_cost_vec have different tier names. ",
-        "This may cause unexpected behavior. ",
-        "Ensure both vectors contain the same tier values."
-      )
-    }
-
-    # Enforce "default" tier when col_tier is NULL
-    if (is.null(cfg$col_tier) || !cfg$col_tier %in% names(data)) {
-      if (!"default" %in% names(cfg$cpr_vec)) {
-        stop(
-          "When col_tier is NULL or tier column is missing, ",
-          "cpr_vec and credit_cost_vec must contain a 'default' tier.\n",
-          "Current cpr_vec tiers: ", paste(names(cfg$cpr_vec), collapse = ", ")
-        )
-      }
-    }
-
-  } else if (cfg$prepay_model == "linear_incentive") {
-
-    li <- list(base_cpr_vec = cfg$base_cpr_vec, beta_vec = cfg$beta_vec,
-               cpr_min_vec = cfg$cpr_min_vec, cpr_max_vec = cfg$cpr_max_vec)
-    missing <- names(li)[vapply(li, is.null, logical(1))]
-    if (length(missing) > 0) {
-      stop("prepay_model = 'linear_incentive' requires: ",
-           paste(missing, collapse = ", "), ".")
-    }
-    if (is.null(cfg$current_market_rate) || !is.numeric(cfg$current_market_rate) ||
-        length(cfg$current_market_rate) != 1L || !is.finite(cfg$current_market_rate)) {
-      stop("prepay_model = 'linear_incentive' requires a single finite numeric ",
-           "current_market_rate.")
-    }
-    tiers <- names(cfg$base_cpr_vec)
-    if (!all(vapply(li, function(v) setequal(names(v), tiers), logical(1)))) {
-      stop("base_cpr_vec, beta_vec, cpr_min_vec, and cpr_max_vec must cover the ",
-           "same set of tier names.")
-    }
-    if (is.null(cfg$col_tier) || !cfg$col_tier %in% names(data)) {
-      if (!"default" %in% tiers) {
-        stop("When col_tier is NULL, the linear_incentive vectors must contain a ",
-             "'default' tier. Current tiers: ", paste(tiers, collapse = ", "))
-      }
-    }
-    base <- cfg$base_cpr_vec[tiers]; beta <- cfg$beta_vec[tiers]
-    cmin <- cfg$cpr_min_vec[tiers];  cmax <- cfg$cpr_max_vec[tiers]
-    if (any(base < 0) || any(base > 1)) {
-      stop("All base_cpr_vec values must be between 0 and 1.")
-    }
-    if (any(cmin < 0) || any(cmax > 1)) {
-      stop("Require 0 <= cpr_min_vec and cpr_max_vec <= 1 for every tier.")
-    }
-    if (any(cmin > cmax)) {
-      stop("cpr_min_vec must be <= cpr_max_vec for every tier. Violations: ",
-           paste(tiers[cmin > cmax], collapse = ", "))
-    }
-    if (any(beta < 0)) {
-      warning("Negative beta_vec for tier(s): ", paste(tiers[beta < 0], collapse = ", "),
-              ". A negative beta means prepayment falls as the rate incentive rises, ",
-              "which is economically unusual. Proceeding as specified.")
-    }
-  }
-
-  # Validate parameter ranges
-  if (cfg$servicing_fee < 0 || cfg$servicing_fee > 1) {
-    stop("servicing_fee must be between 0 and 1 (as a decimal). Got: ", cfg$servicing_fee)
-  }
-  if (cfg$annual_reporting_fee < 0 || cfg$annual_reporting_fee > 1) {
-    stop("annual_reporting_fee must be between 0 and 1 (as a decimal). Got: ", cfg$annual_reporting_fee)
-  }
-  if (cfg$investor_share < 0 || cfg$investor_share > 1) {
-    stop("investor_share must be between 0 and 1. Got: ", cfg$investor_share)
-  }
-  if (cfg$de_minimis_balance < 0) {
-    stop("de_minimis_balance must be non-negative. Got: ", cfg$de_minimis_balance)
-  }
-  if (isTRUE(cfg$reamortize_survivors) &&
-      identical(cfg$interest_on_starting_balance, FALSE)) {
-    warning(
-      "reamortize_survivors = TRUE accrues interest on the starting balance ",
-      "by construction (the scheduled payment depends on interest, which ",
-      "would be circular on a post-prepay balance). ",
-      "interest_on_starting_balance = FALSE is ignored under this convention."
-    )
-  }
-
-  # Validate CPR values (should be between 0 and 1)
-  if (any(cfg$cpr_vec < 0) || any(cfg$cpr_vec > 1)) {
-    stop("All CPR values must be between 0 and 1 (as decimals). Check cpr_vec.")
-  }
-
-  # Validate credit cost values (should be between 0 and 1)
-  if (any(cfg$credit_cost_vec < 0) || any(cfg$credit_cost_vec > 1)) {
-    stop("All credit cost values must be between 0 and 1 (as decimals). Check credit_cost_vec.")
-  }
-
-  # Validate monthly_totals_group_vars
-  if (!is.null(cfg$monthly_totals_group_vars)) {
-    if (!is.character(cfg$monthly_totals_group_vars)) {
-      stop("monthly_totals_group_vars must be a character vector of column names.")
-    }
-  }
-
-  invisible(TRUE)
-}
-
-
-# Data validation helper function - RETURNS mutated data
-validate_data <- function(data, cfg) {
-
-  # Check for NA values in required columns
-  na_checks <- list(
-    balance = sum(is.na(data[[cfg$col_balance]])),
-    rate = sum(is.na(data[[cfg$col_rate]])),
-    term = sum(is.na(data[[cfg$col_term]])),
-    start_date = sum(is.na(data[[cfg$col_start_date]]))
-  )
-
-  na_found <- na_checks[na_checks > 0]
-
-  if (length(na_found) > 0) {
-    warning(
-      "NA values found in required columns:\n",
-      paste(sprintf("  - %s: %d NA values", names(na_found), unlist(na_found)), collapse = "\n"),
-      "\nLoans with NA values will be skipped."
-    )
-  }
-
-  # Validate balance values
-  if (any(data[[cfg$col_balance]] <= 0, na.rm = TRUE)) {
-    n_invalid <- sum(data[[cfg$col_balance]] <= 0, na.rm = TRUE)
-    warning(
-      n_invalid, " loans have balance <= 0. These loans will be skipped."
-    )
-  }
-
-  # Validate rate values (should be between 0 and 1 for decimal rates)
-  rates <- data[[cfg$col_rate]]
-  if (any(rates > 1, na.rm = TRUE)) {
-    warning(
-      "Some interest rates are greater than 1. ",
-      "Rates should be specified as decimals (e.g., 0.0599 for 5.99%), not percentages. ",
-      "Please verify your rate values."
-    )
-  }
-
-  if (any(rates < 0, na.rm = TRUE)) {
-    n_negative <- sum(rates < 0, na.rm = TRUE)
-    warning(n_negative, " loans have negative interest rates. These loans will be skipped.")
-  }
-
-  # Validate term values
-  if (any(data[[cfg$col_term]] <= 0, na.rm = TRUE)) {
-    n_invalid <- sum(data[[cfg$col_term]] <= 0, na.rm = TRUE)
-    warning(n_invalid, " loans have term <= 0. These loans will be skipped.")
-  }
-
-  # Check for unreasonably high servicing fees relative to rates
-  if (!is.null(cfg$servicing_fee) && cfg$servicing_fee > 0) {
-    median_rate <- median(rates, na.rm = TRUE)
-    if (cfg$servicing_fee > median_rate) {
-      warning(
-        "servicing_fee (", sprintf("%.4f", cfg$servicing_fee), ") is greater than median portfolio rate (",
-        sprintf("%.4f", median_rate), "). This may result in negative net interest. Please verify."
-      )
-    }
-  }
-
-  # Validate and convert date column - PERSIST THE CONVERSION (CHANGE 4: Remove message)
-  if (!inherits(data[[cfg$col_start_date]], "Date")) {
-    tryCatch({
-      data[[cfg$col_start_date]] <- as.Date(data[[cfg$col_start_date]])
-    }, error = function(e) {
-      stop(
-        "Column '", cfg$col_start_date, "' cannot be converted to Date format. ",
-        "Please ensure it contains valid dates."
-      )
-    })
-  }
-
-  # Return the mutated data frame
-  return(data)
 }
 
 
@@ -710,7 +487,7 @@ generate_single_loan_cash_flow <- function(loan_id,
         sb * monthly_rate / (1 - (1 + monthly_rate)^(-n_rem))
       }
 
-      # Full-month interest on the starting balance (see validate_config:
+      # Full-month interest on the starting balance (see validate_cash_flow_config:
       # post-prepay accrual would be circular under this ordering)
       acc <- sb
       gi  <- acc * monthly_rate

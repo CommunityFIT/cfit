@@ -126,6 +126,28 @@ Generate monthly cash flow projections for a loan portfolio and calculate portfo
 - Loan-level monthly projected cash flows
 - Optional aggregated monthly totals for portfolio analysis
 
+**Input validation (development version)**
+
+`calculate_cash_flows()` rejects invalid records before projection. Supply a
+non-empty snapshot with unique, non-missing loan IDs, positive finite balances,
+non-negative finite decimal rates, positive integer remaining terms, and valid
+dates. Correct or deliberately filter invalid records before calling the function.
+Unknown or duplicated configuration keys and missing explicitly mapped columns
+raise errors. IDs are generated only when the implicit `LOAN_ID` column is absent
+or `col_loanid = NULL`.
+
+Assumption vectors must have unique tier names and finite values. PD and LGD must
+be supplied together, each within `[0, 1]`, and are matched by tier name rather
+than position. Credit costs must cover every tier in the selected prepayment
+model. Without a tier column, define a named `default` tier. Unknown or missing
+loan tiers use that default for both prepayment and credit assumptions, with a
+warning; they raise an error if no default exists. Known-tier portfolios can omit
+the default. Reordering assumption vectors does not change results.
+
+Optional payment and original-balance columns accept `NA` to request the existing
+per-loan fallback; other supplied values must be positive and finite. These checks
+do not add balloon or negative-amortization support.
+
 **Modeling conventions (v0.2.5+)**
 
 - **Prepayments are full payoffs** (`reamortize_survivors = TRUE`, default):
