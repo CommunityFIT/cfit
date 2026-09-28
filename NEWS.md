@@ -1,3 +1,31 @@
+# cfit (development version)
+
+## Reliable core: cash-flow input validation
+
+* `calculate_cash_flows()` now rejects malformed configuration keys and values,
+  missing mapped columns, duplicate/missing loan IDs, invalid required data,
+  and non-integer terms before projection. Invalid records previously warned
+  and were skipped; callers must now correct or explicitly filter those records
+  before calling the function. Empty input also raises an error.
+* Automatic IDs remain available when the implicit `LOAN_ID` column is absent
+  or `col_loanid = NULL`. An explicitly named ID column must exist.
+* Optional payment and original-balance columns retain their per-loan `NA`
+  fallback. Non-positive or non-finite supplied values are now rejected.
+* PD and LGD must be supplied together and individually lie in [0, 1]. Tier
+  names must match as sets; multiplication aligns by name, not position.
+  Effective credit costs must cover every tier in the active prepayment model.
+* Tier vectors require unique, non-empty names and finite numeric values.
+  The named `default` tier is used regardless of vector order. Unknown/missing
+  loan tiers use that default for both CPR and credit costs with a warning, or
+  error if it is absent. Portfolios containing only known tiers do not need a
+  default. The output `tier` records the resolved assumption tier.
+* Existing valid golden cash-flow fixtures are unchanged. Results can change
+  for inputs that previously selected a fallback by vector position. Define a
+  named `default` explicitly when fallback behavior is intended.
+* Added targeted validation/regression tests and GitHub Actions package checks
+  on Linux, macOS, and Windows. Projection arithmetic and date conventions are
+  unchanged in this validation update.
+
 # cfit 0.2.5.1
 
 ## Bug fixes

@@ -7,9 +7,13 @@
 calculate_cash_flows(data, config = list())
 }
 \arguments{
-\item{data}{A data frame containing loan portfolio snapshot data}
+\item{data}{A non-empty data frame containing one snapshot row per loan.
+Required numeric fields must be finite and non-missing; balances must be
+positive, rates non-negative, and terms positive integers. Dates must be
+valid and non-missing. Invalid records raise an error rather than being skipped.}
 
-\item{config}{A list of configuration parameters. See details for structure.}
+\item{config}{A named list of configuration parameters. Unknown, duplicate,
+or unnamed entries raise an error. See details for structure.}
 }
 \value{
 Depending on return_monthly_totals setting:
@@ -33,6 +37,27 @@ Generates monthly cash flow projections for a loan portfolio, incorporating
 user-defined prepayment speeds (CPR), credit costs, and various fee structures.
 }
 \details{
+Loan IDs must be unique and non-missing. If the implicit default LOAN_ID
+column is absent, or col_loanid is NULL, sequential IDs are generated.
+Every explicitly requested column must exist, including col_loanid.
+
+Assumption vectors must have unique, non-empty tier names and finite values.
+Probability and credit-cost values must be in \verb{[0, 1]}. PD and LGD must be
+supplied together, cover the same tiers, and are multiplied by matching name,
+regardless of vector order. Effective credit costs must cover all tiers in
+the active prepayment model. Without col_tier, a named "default" tier is
+required. Unknown or missing loan tiers use that same named default for both
+prepayment and credit costs, with a warning; without it, they raise an error.
+The output tier records the resolved assumption tier. The first vector entry
+is never used as an implicit default.
+
+Optional payment and original-balance columns must be numeric. NA values
+request the calculated payment or current-balance fallback for that loan;
+other supplied values must be finite and positive. Scalar settings must have
+the documented numeric or logical type. Rates above 1 still warn without
+automatic conversion. Validation does not add support for balloon payments
+or negative amortization.
+
 Configuration list structure:
 \itemize{
 \item col_loanid: Column name for loan identifier (default: "LOAN_ID")

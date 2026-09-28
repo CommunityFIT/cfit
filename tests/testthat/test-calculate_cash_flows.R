@@ -247,25 +247,25 @@ test_that("cash flow dates are sequential and start one month after eff_date", {
 })
 
 # Test 13: Validation catches negative balances
-test_that("calculate_cash_flows warns on negative or zero balances", {
+test_that("calculate_cash_flows rejects negative or zero balances", {
   loan_data <- create_test_portfolio(2)
   loan_data$balance[1] <- -1000
   loan_data$balance[2] <- 0
 
-  expect_warning(
+  expect_error(
     calculate_cash_flows(loan_data, config = list()),
-    "balance <= 0"
+    "positive values"
   )
 })
 
 # Test 14: NA values in required columns
-test_that("calculate_cash_flows warns on NA values", {
+test_that("calculate_cash_flows rejects missing required values", {
   loan_data <- create_test_portfolio(2)
   loan_data$current_interest_rate[1] <- NA
 
-  expect_warning(
+  expect_error(
     calculate_cash_flows(loan_data, config = list()),
-    "NA values found"
+    "missing or non-finite"
   )
 })
 

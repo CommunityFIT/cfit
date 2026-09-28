@@ -7,7 +7,7 @@
 #'
 #' @param data Validated loan data frame.
 #' @param cfg Merged configuration list.
-#' @param default_tier Fallback tier name (first name of cpr_vec).
+#' @param default_tier Explicit fallback tier name ("default" for public calls).
 #' @return Numeric vector of annual CPRs, length nrow(data).
 #' @keywords internal
 #' @noRd
