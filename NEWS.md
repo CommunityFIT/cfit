@@ -1,5 +1,26 @@
 # cfit (development version)
 
+## Reliable core: principal accounting and payment diagnostics
+
+* Corrected `reamortize_survivors = FALSE`: total principal now includes both
+  scheduled principal and prepayments. The prior cap incorrectly limited their
+  sum to a balance already reduced by prepayment. This can change payoff timing,
+  collections, interest, yield, duration, and WAL for fixed-payment projections.
+* Small-balance cleanup is now included in `scheduled_principal` as well as
+  `total_principal`, preserving component reconciliation in both conventions
+  and monthly totals. `scheduled_payment` remains the payment before final payoff
+  adjustments. Positive sub-cent balances are no longer silently dropped.
+* Supplied payments below the period's gross accrued interest now error with
+  loan ID and month. The check respects survivor scaling and the selected
+  interest accrual convention, with a floating-point roundoff tolerance.
+* Loans retaining at least `max(0.01, de_minimis_balance)` at maturity trigger
+  one portfolio warning listing affected IDs and the total residual. Residuals
+  remain outstanding; no balloon is added. This applies to both output modes.
+* Existing survivor-convention golden fixtures remain unchanged. The historical
+  fixed-payment fixture is retained, with explicit reconciled payoff expectations
+  replacing exact reproduction of its defective terminal rows. Added independent
+  payoff examples and principal-conservation tests across both conventions.
+
 ## Reliable core: cash-flow input validation
 
 * `calculate_cash_flows()` now rejects malformed configuration keys and values,

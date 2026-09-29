@@ -58,6 +58,22 @@ the documented numeric or logical type. Rates above 1 still warn without
 automatic conversion. Validation does not add support for balloon payments
 or negative amortization.
 
+Supplied payments (after survivor scaling, if enabled) must cover each
+period's gross accrued interest under the selected accrual convention.
+Payments below interest raise an error identifying the loan and month;
+only floating-point roundoff is tolerated. Payments equal to interest are
+allowed, but may leave principal outstanding at maturity.
+
+Small-balance cleanup is included in scheduled_principal, so total_principal
+equals scheduled_principal + prepayment. scheduled_payment remains the
+calculated or supplied payment before final payoff adjustments. Positive
+sub-cent balances are projected rather than silently discarded.
+
+A portfolio-level warning identifies loans with residual balances at maturity
+of at least max(0.01, de_minimis_balance), in either output mode. These balances
+remain in remaining_balance; no balloon payment is assumed. Downstream PV and
+WAL therefore describe only the projected collections, not full repayment.
+
 Configuration list structure:
 \itemize{
 \item col_loanid: Column name for loan identifier (default: "LOAN_ID")
@@ -84,7 +100,9 @@ from interest cash flows (default: FALSE). FALSE applies losses through
 principal balance reduction only. TRUE additionally deducts charge-offs
 from interest, which double-counts the loss and is retained only for
 backward compatibility.
-\item de_minimis_balance: Threshold below which balance is forced to zero (default: 1.00)
+\item de_minimis_balance: Positive residual balances below this threshold
+are collected as additional scheduled principal (default: 1.00).
+Set to 0 to disable this cleanup.
 \item reamortize_survivors: Prepayment cash flow convention (default: TRUE).
 TRUE treats SMM prepayments as full payoffs of a fraction of loans: the
 surviving balance re-amortizes over the remaining term each month, so the

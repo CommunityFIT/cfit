@@ -58,6 +58,22 @@ utils::globalVariables(c(
 #' automatic conversion. Validation does not add support for balloon payments
 #' or negative amortization.
 #'
+#' Supplied payments (after survivor scaling, if enabled) must cover each
+#' period's gross accrued interest under the selected accrual convention.
+#' Payments below interest raise an error identifying the loan and month;
+#' only floating-point roundoff is tolerated. Payments equal to interest are
+#' allowed, but may leave principal outstanding at maturity.
+#'
+#' Small-balance cleanup is included in scheduled_principal, so total_principal
+#' equals scheduled_principal + prepayment. scheduled_payment remains the
+#' calculated or supplied payment before final payoff adjustments. Positive
+#' sub-cent balances are projected rather than silently discarded.
+#'
+#' A portfolio-level warning identifies loans with residual balances at maturity
+#' of at least max(0.01, de_minimis_balance), in either output mode. These balances
+#' remain in remaining_balance; no balloon payment is assumed. Downstream PV and
+#' WAL therefore describe only the projected collections, not full repayment.
+#'
 #' Configuration list structure:
 #' \itemize{
 #'   \item col_loanid: Column name for loan identifier (default: "LOAN_ID")
@@ -84,7 +100,9 @@ utils::globalVariables(c(
 #'     principal balance reduction only. TRUE additionally deducts charge-offs
 #'     from interest, which double-counts the loss and is retained only for
 #'     backward compatibility.
-#'   \item de_minimis_balance: Threshold below which balance is forced to zero (default: 1.00)
+#'   \item de_minimis_balance: Positive residual balances below this threshold
+#'     are collected as additional scheduled principal (default: 1.00).
+#'     Set to 0 to disable this cleanup.
 #'   \item reamortize_survivors: Prepayment cash flow convention (default: TRUE).
 #'     TRUE treats SMM prepayments as full payoffs of a fraction of loans: the
 #'     surviving balance re-amortizes over the remaining term each month, so the
@@ -314,6 +332,21 @@ calculate_cash_flows <- function(data, config = list()) {
   # Bind all loan cash flows
   loan_cash_flows <- dplyr::bind_rows(cash_flows_list)
 
+  # Report incomplete maturity projections once per portfolio, in either output
+  # mode. Residual principal remains outstanding; it is not an assumed balloon.
+  terminal <- loan_cash_flows[!duplicated(loan_cash_flows$LOAN_ID, fromLast = TRUE), ]
+  residuals <- terminal[terminal$remaining_balance >= max(0.01, cfg$de_minimis_balance), ]
+  if (nrow(residuals) > 0L) {
+    warning(
+      nrow(residuals), " loan(s) retain a balance at contractual maturity (total ",
+      format(sum(residuals$remaining_balance), digits = 10, trim = TRUE),
+      "). Loan IDs: ", paste(utils::head(residuals$LOAN_ID, 5), collapse = ", "),
+      if (nrow(residuals) > 5L) ", ..." else "",
+      ". Projected principal collections are incomplete; verify payments and terms. ",
+      "No balloon payoff has been added.", call. = FALSE
+    )
+  }
+
   # Join grouping columns back if needed (simpler than passing through pmap)
   if (!is.null(cfg$monthly_totals_group_vars)) {
     group_cols_available <- intersect(cfg$monthly_totals_group_vars, names(data))
@@ -462,13 +495,12 @@ generate_single_loan_cash_flow <- function(loan_id,
   remaining_balance_v   <- numeric(term)
 
   balance     <- principal
-  min_balance <- 0.01
   n_months    <- 0L
   survival    <- 1.0   # cumulative surviving fraction (reamortize path)
 
   # Sequential balance roll-forward (each month depends on the prior)
   i <- 1L
-  while (i <= term && balance >= min_balance) {
+  while (i <= term && balance > 0) {
     sb <- balance
 
     # Cap credit loss at 100% of starting balance
@@ -509,7 +541,7 @@ generate_single_loan_cash_flow <- function(loan_id,
 
     } else {
 
-      # ---- Legacy fixed-payment (curtailment) convention: unchanged ----
+      # ---- Fixed-payment (curtailment) convention ----
       max_prepay <- max(0, sb - cl)
       pp <- min(sb * monthly_smm, max_prepay)
 
@@ -526,12 +558,26 @@ generate_single_loan_cash_flow <- function(loan_id,
       sp <- max(0, pmt_i - gi)
       sp <- min(sp, ab)
 
-      tp <- min(sp + pp, ab)
+      # pp is capped at sb - cl; sp is capped at the balance after pp.
+      # Capping their sum at ab would discard principal already prepaid.
+      tp <- sp + pp
       rb <- max(0, sb - tp - cl)
     }
 
-    # De minimis handling
+    # Check the actual period's payment and accrual convention, including
+    # survivor scaling. Allow only floating-point noise, not unpaid interest.
+    payment_tolerance <- 64 * .Machine$double.eps * max(1, abs(pmt_i), abs(gi))
+    if (use_monthly_payment && pmt_i < gi - payment_tolerance) {
+      stop("Loan '", loan_id, "', month ", i, ": supplied payment (",
+           format(pmt_i, digits = 10, trim = TRUE), ") is below accrued interest (",
+           format(gi, digits = 10, trim = TRUE),
+           "). Unpaid interest / negative amortization is not supported.", call. = FALSE)
+    }
+
+    # Treat a small final balance as scheduled payoff principal, preserving
+    # both total collections and the component reconciliation.
     if (rb > 0 && rb < cfg$de_minimis_balance) {
+      sp <- sp + rb
       tp <- tp + rb
       rb <- 0
     }
