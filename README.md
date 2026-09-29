@@ -148,6 +148,20 @@ Optional payment and original-balance columns accept `NA` to request the existin
 per-loan fallback; other supplied values must be positive and finite. These checks
 do not add balloon or negative-amortization support.
 
+Supplied payments must cover each period's gross accrued interest after any
+survivor scaling. Underpayments raise an error identifying the loan and month.
+Interest-only payments are accepted, but the engine warns when loans retain
+balances at maturity of at least `max(0.01, de_minimis_balance)`. The warning
+reports affected IDs and total residual principal; it does not add a balloon.
+PV and WAL calculated from these projections describe only the collections
+actually projected.
+
+Small-balance cleanup is reported as additional `scheduled_principal`, so
+`total_principal = scheduled_principal + prepayment` in both conventions.
+`scheduled_payment` remains the payment before final payoff adjustments.
+The fixed-payment convention now includes all prepayments in total principal;
+this corrects a cap that could delay or omit principal near payoff.
+
 **Modeling conventions (v0.2.5+)**
 
 - **Prepayments are full payoffs** (`reamortize_survivors = TRUE`, default):
