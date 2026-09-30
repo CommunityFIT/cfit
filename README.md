@@ -185,6 +185,24 @@ this corrects a cap that could delay or omit principal near payoff.
 - **Application order** within each month: credit loss, then scheduled
   principal, then prepayment (SMM applied to the post-scheduled balance).
 
+**Grouping and original classifications (development version)**
+
+Loan cash flows include `original_tier` (the configured input classification) and
+`tier` (the assumptions actually used). For example, a Commercial-C loan using
+fallback assumptions retains `original_tier = "Commercial-C"` while
+`tier = "default"`. Without `col_tier`, `original_tier` is `NA`.
+
+The tier example below demonstrates grouping by original classification and
+inspecting fallback assumptions.
+
+Grouping retains missing values and must preserve portfolio totals. Missing
+grouping columns now raise errors, including when only loan-level output is
+requested. Generated grouping fields are `LOAN_ID`, `eff_date`, `rate`, `tier`,
+`original_tier`, `month`, and `date`; cash-flow amount columns cannot be keys.
+Rename input classifications that conflict with generated names unless they
+are the corresponding configured source column. In particular, `date` always
+means projected payment date, not an input reporting or origination date.
+
 
 ```r
 # Optional: used here only to demonstrate portfolio yield calculation
@@ -256,7 +274,46 @@ config_tiered <- list(
 )
 
 cash_flows_tiered <- calculate_cash_flows(loan_portfolio_tiered, config_tiered)
+
+# Each configured tier matches directly, so original_tier and tier are identical
+unique(cash_flows_tiered[c("LOAN_ID", "original_tier", "tier")])
 ```
+
+All input tiers are defined above, so no `default` is needed. To summarize cash
+flows by original classification, request monthly totals:
+
+```r
+config_grouped <- config_tiered
+config_grouped$return_monthly_totals <- TRUE
+config_grouped$monthly_totals_group_vars <- "original_tier"
+
+results_tiered <- calculate_cash_flows(loan_portfolio_tiered, config_grouped)
+head(results_tiered$monthly_totals)
+```
+
+If a classification has no explicit assumptions, define a named `default` in
+both vectors. Here C retains its classification but uses default assumptions:
+
+```r
+config_fallback <- config_grouped
+config_fallback$cpr_vec <- c(A = 0.05, B = 0.08, default = 0.12)
+config_fallback$credit_cost_vec <- c(A = 0.008, B = 0.015, default = 0.025)
+config_fallback$monthly_totals_group_vars <- c("original_tier", "tier")
+
+# Expected warning: unknown tier C uses the named default
+results_fallback <- calculate_cash_flows(loan_portfolio_tiered, config_fallback)
+unique(results_fallback$loan_cash_flows[c("LOAN_ID", "original_tier", "tier")])
+# LOAN_ID original_tier tier
+# L001    A             A
+# L002    B             B
+# L003    A             A
+# L004    C             default
+```
+
+This example gives C the same rates through the default, so its projected cash
+flows are unchanged. Grouping by `original_tier` keeps C separate; grouping by
+`tier` combines it with any other loans using default assumptions.
+
 #### Rate-Responsive Prepayment (Linear Incentive)
 
 Instead of fixed CPR assumptions, derive each loan's prepayment speed from its *rate incentive* — the gap between its coupon and the current market rate. As market rates fall, in-the-money borrowers prepay faster:

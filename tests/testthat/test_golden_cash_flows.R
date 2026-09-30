@@ -9,7 +9,11 @@ test_that("calculate_cash_flows reproduces v0.2.5 golden masters", {
     golden  <- readRDS(golden_file)
     current <- suppressWarnings(do.call(calculate_cash_flows, cases[[nm]]))
 
-    expect_equal(current, golden, tolerance = 1e-8,
+    strip_metadata <- function(x) {
+      drop <- function(d) d[, setdiff(names(d), "original_tier")]
+      if (is.data.frame(x)) drop(x) else lapply(x, drop)
+    }
+    expect_equal(strip_metadata(current), golden, tolerance = 1e-8,
                  info = paste("golden case:", nm))
   }
 })
