@@ -319,7 +319,7 @@ test_that("monthly_totals_group_vars allows grouping by additional variables", {
 })
 
 # Test 17: monthly_totals_group_vars with invalid column
-test_that("monthly_totals_group_vars warns on invalid columns", {
+test_that("monthly_totals_group_vars rejects invalid columns", {
   loan_data <- create_test_portfolio_with_tiers(2)
 
   config <- list(
@@ -327,9 +327,9 @@ test_that("monthly_totals_group_vars warns on invalid columns", {
     monthly_totals_group_vars = c("nonexistent_column")
   )
 
-  expect_warning(
+  expect_error(
     calculate_cash_flows(loan_data, config),
-    "not in cash flows data"
+    "Missing grouping columns"
   )
 })
 

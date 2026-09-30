@@ -29,6 +29,8 @@ utils::globalVariables(c(
 #'       total_fees, scheduled_principal, prepayment, total_principal, credit_loss,
 #'       remaining_balance, orig_fee, net_interest, total_payment, investor_principal,
 #'       investor_interest, investor_total
+#'       and original_tier (input classification as character; NA when col_tier
+#'       is not configured). Requested input grouping columns are also attached.
 #'     \item If TRUE: A list with two elements:
 #'       \itemize{
 #'         \item loan_cash_flows: Detailed loan-level cash flows (data frame)
@@ -50,6 +52,19 @@ utils::globalVariables(c(
 #' prepayment and credit costs, with a warning; without it, they raise an error.
 #' The output tier records the resolved assumption tier. The first vector entry
 #' is never used as an implicit default.
+#' original_tier preserves the input classification, including missing values,
+#' independently of that fallback. Without col_tier it is NA, even if an unused
+#' tier column is present in data.
+#'
+#' Grouping columns must exist in the input or be supported generated fields:
+#' LOAN_ID, eff_date, rate, tier, original_tier, month, and date. date always means
+#' projected payment date and is included once in monthly totals. Input columns
+#' sharing a generated name are ambiguous unless that name is the corresponding
+#' configured source column (for example, col_rate = "rate"). Rename conflicting
+#' input classifications before grouping. Cash-flow amount columns cannot be
+#' grouping keys. Missing grouping values are retained as NA groups. These checks
+#' apply even when return_monthly_totals is FALSE. Metadata lookup requires one
+#' input record per loan and preserves all projected rows and their order.
 #'
 #' Optional payment and original-balance columns must be numeric. NA values
 #' request the calculated payment or current-balance fallback for that loan;
@@ -119,7 +134,9 @@ utils::globalVariables(c(
 #'   \item lgd_vec: Optional named vector of LGD rates (overrides credit_cost_vec if provided)
 #'   \item return_monthly_totals: Whether to return aggregated monthly totals (default: FALSE)
 #'   \item monthly_totals_group_vars: Optional character vector of column names to group monthly totals by,
-#'     in addition to date (default: NULL). For example, c("tier") to see monthly totals by tier.
+#'     in addition to date (default: NULL). Use "original_tier" for input
+#'     classification or "tier" for the resolved assumption tier. Missing or
+#'     ambiguous columns raise an error instead of being ignored.
 #'   \item show_progress: Show progress messages for large portfolios (default: TRUE)
 #'   \item prepay_model: "tier_static" (default) or "linear_incentive"
 #'   \item current_market_rate: Scalar market rate (decimal) for linear_incentive;
@@ -347,22 +364,7 @@ calculate_cash_flows <- function(data, config = list()) {
     )
   }
 
-  # Join grouping columns back if needed (simpler than passing through pmap)
-  if (!is.null(cfg$monthly_totals_group_vars)) {
-    group_cols_available <- intersect(cfg$monthly_totals_group_vars, names(data))
-    # Only join columns that don't already exist in loan_cash_flows
-    cols_to_join <- setdiff(group_cols_available, names(loan_cash_flows))
-
-    if (length(cols_to_join) > 0) {
-      lookup <- data[, c(cfg$col_loanid, cols_to_join), drop = FALSE]
-      names(lookup)[1] <- "LOAN_ID"
-      loan_cash_flows <- dplyr::left_join(
-        loan_cash_flows,
-        dplyr::distinct(lookup),  # Ensure unique loan IDs
-        by = "LOAN_ID"
-      )
-    }
-  }
+  loan_cash_flows <- attach_cash_flow_groups(loan_cash_flows, data, cfg)
 
   if (cfg$show_progress && nrow(data) > 1000) {
     message("Cash flows generated successfully: ",
@@ -372,21 +374,7 @@ calculate_cash_flows <- function(data, config = list()) {
   # Return based on monthly_totals flag
   if (cfg$return_monthly_totals) {
 
-    # Build grouping variables - always include date
-    group_cols <- c("date", cfg$monthly_totals_group_vars)
-
-    # Validate group_vars exist in loan_cash_flows
-    if (!is.null(cfg$monthly_totals_group_vars)) {
-      missing_group_cols <- setdiff(cfg$monthly_totals_group_vars, names(loan_cash_flows))
-      if (length(missing_group_cols) > 0) {
-        warning(
-          "The following monthly_totals_group_vars are not in cash flows data: ",
-          paste(missing_group_cols, collapse = ", "),
-          ". They will be ignored."
-        )
-        group_cols <- intersect(group_cols, names(loan_cash_flows))
-      }
-    }
+    group_cols <- unique(c("date", cfg$monthly_totals_group_vars))
 
     monthly_totals <- loan_cash_flows %>%
       dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%

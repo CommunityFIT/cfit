@@ -187,5 +187,7 @@ test_that("linear incentive validates inputs and uses the named default", {
   expect_equal(calculate_cash_flows(x, reordered), out)
   x$tier <- c("Z", "default"); cfg$col_tier <- "tier"
   expect_warning(fallback <- calculate_cash_flows(x, cfg), "named 'default'")
+  expect_equal(fallback$original_tier, rep(c("Z", "default"), c(12, 24)))
+  fallback$original_tier <- out$original_tier
   expect_equal(fallback, out)
 })

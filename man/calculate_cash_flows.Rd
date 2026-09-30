@@ -25,6 +25,8 @@ scheduled_payment, gross_interest, servicing_fee_amt, reporting_fee_amt,
 total_fees, scheduled_principal, prepayment, total_principal, credit_loss,
 remaining_balance, orig_fee, net_interest, total_payment, investor_principal,
 investor_interest, investor_total
+and original_tier (input classification as character; NA when col_tier
+is not configured). Requested input grouping columns are also attached.
 \item If TRUE: A list with two elements:
 \itemize{
 \item loan_cash_flows: Detailed loan-level cash flows (data frame)
@@ -50,6 +52,19 @@ required. Unknown or missing loan tiers use that same named default for both
 prepayment and credit costs, with a warning; without it, they raise an error.
 The output tier records the resolved assumption tier. The first vector entry
 is never used as an implicit default.
+original_tier preserves the input classification, including missing values,
+independently of that fallback. Without col_tier it is NA, even if an unused
+tier column is present in data.
+
+Grouping columns must exist in the input or be supported generated fields:
+LOAN_ID, eff_date, rate, tier, original_tier, month, and date. date always means
+projected payment date and is included once in monthly totals. Input columns
+sharing a generated name are ambiguous unless that name is the corresponding
+configured source column (for example, col_rate = "rate"). Rename conflicting
+input classifications before grouping. Cash-flow amount columns cannot be
+grouping keys. Missing grouping values are retained as NA groups. These checks
+apply even when return_monthly_totals is FALSE. Metadata lookup requires one
+input record per loan and preserves all projected rows and their order.
 
 Optional payment and original-balance columns must be numeric. NA values
 request the calculated payment or current-balance fallback for that loan;
@@ -119,7 +134,9 @@ for backward compatibility only.
 \item lgd_vec: Optional named vector of LGD rates (overrides credit_cost_vec if provided)
 \item return_monthly_totals: Whether to return aggregated monthly totals (default: FALSE)
 \item monthly_totals_group_vars: Optional character vector of column names to group monthly totals by,
-in addition to date (default: NULL). For example, c("tier") to see monthly totals by tier.
+in addition to date (default: NULL). Use "original_tier" for input
+classification or "tier" for the resolved assumption tier. Missing or
+ambiguous columns raise an error instead of being ignored.
 \item show_progress: Show progress messages for large portfolios (default: TRUE)
 \item prepay_model: "tier_static" (default) or "linear_incentive"
 \item current_market_rate: Scalar market rate (decimal) for linear_incentive;

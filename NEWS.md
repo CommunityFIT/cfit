@@ -1,5 +1,23 @@
 # cfit (development version)
 
+## Reliable core: safe grouping and aggregation
+
+* Loan cash flows now include `original_tier`, the configured input classification
+  as character, retaining missing values. It is `NA` when `col_tier` is not set.
+  `tier` continues to identify the resolved assumption tier. Group by either or
+  both without changing projected amounts.
+* Missing grouping columns now error in either return mode. Generated grouping
+  fields are `LOAN_ID`, `eff_date`, `rate`, `tier`, `original_tier`, `month`, and
+  `date`; monetary output fields cannot be grouping keys. Ambiguous input names
+  that collide with generated fields must be renamed unless they are the
+  corresponding explicitly mapped source. `date` is always payment date.
+* Metadata attachment now uses a checked many-to-one lookup that preserves row
+  order and cannot multiply cash flows. Missing classification values are kept
+  in grouped totals. Requesting `date` explicitly does not duplicate the key.
+* Added aggregation, row-order, and principal-reconciliation tests. Historical
+  fixtures remain unchanged; golden comparisons exclude only the newly added
+  `original_tier` metadata column. Existing financial calculations are unchanged.
+
 ## Reliable core: principal accounting and payment diagnostics
 
 * Corrected `reamortize_survivors = FALSE`: total principal now includes both
