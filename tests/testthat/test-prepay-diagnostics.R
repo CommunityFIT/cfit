@@ -154,3 +154,74 @@ test_that("reserved grouping names and invalid diagnostic controls are rejected"
     expect_error(prepay_estimate(x, min_begin_balance = bad), "min_begin_balance")
   }
 })
+
+test_that("portfolio exits are payoffs by default and unresolved in strict mode", {
+  # Loan b leaves the portfolio before March and never returns.
+  x <- prepay_history()[-6, ]; x$TYPECODE <- "POOL"
+  expect_no_warning(out <- prepay_estimate(x))
+  expect_equal(out$PAYOFF_EXITS, c(0L, 1L))
+  expect_equal(out$UNRESOLVED_EXITS, c(0L, 0L))
+  expect_equal(out$DIAGNOSTIC, c("ok", "ok"))
+  expect_equal(out$PREPAYMENT[2], 1800)
+  expect_equal(out$SMM[2], 1800 / 2600)
+  expect_equal(out$CPR[2], 1 - (1 - 1800 / 2600)^12)
+  # Portfolio-only grouping, as used for whole-portfolio speeds.
+  expect_no_warning(all <- calculate_prepay_speed(x, "EFFDATE",
+    list(col_loanid = "ID", interest_basis = NA)))
+  expect_equal(all$SMM, out$SMM)
+  expect_warning(strict <- prepay_estimate(x, exit_treatment = "unresolved"), "undefined")
+  expect_equal(strict$UNRESOLVED_EXITS, c(0L, 1L))
+  expect_equal(strict$PAYOFF_EXITS, c(0L, 0L))
+  expect_true(is.na(strict$CPR[2]))
+  expect_match(strict$DIAGNOSTIC[2], "unresolved_exits")
+})
+
+test_that("listed non-prepayment exits are removed from runoff and the pool", {
+  x <- prepay_history()[-6, ]; x$TYPECODE <- "POOL"
+  for (mode in c("payoff", "unresolved")) {
+    out <- prepay_estimate(x, exit_treatment = mode, non_prepay_exit_ids = "b")
+    expect_equal(out$EXCLUDED_EXIT_BAL, c(0, 1800))
+    expect_equal(out$PAYOFF_EXITS, c(0L, 0L))
+    expect_equal(out$ACTUAL_PRIN[2], 100)
+    expect_equal(out$AVAILABLE_TO_PREPAY[2], 800)
+    expect_equal(out$SMM[2], 0)
+    expect_equal(out$DIAGNOSTIC[2], "ok")
+  }
+})
+
+test_that("a cohort whose loans all paid off ends at zero balance", {
+  x <- prepay_history()[-6, ]
+  out <- prepay_estimate(x)
+  b <- out[out$TYPECODE == "B", ]
+  expect_true(b$COHORT_DISAPPEARED[2])
+  expect_equal(b$END_BAL[2], 0)
+  expect_equal(b$SMM[2], 1)
+  expect_equal(b$DIAGNOSTIC[2], "ok")
+  # Without loan IDs the disappearance remains unresolved.
+  expect_warning(out <- prepay_estimate(x, ids = FALSE), "undefined")
+  expect_match(out$DIAGNOSTIC[out$TYPECODE == "B"][2], "cohort_disappeared")
+})
+
+test_that("prior-month originations first reported now are funding, not entries", {
+  x <- prepay_history()[1:4, ]; x$TYPECODE <- "POOL"
+  late <- x[3, ]; late$ID <- "late"; late$ORIGDATE <- as.Date("2024-01-31")
+  late$BAL <- 500; late$ORIGBAL <- 500
+  out <- prepay_estimate(rbind(x, late))
+  expect_equal(out$FUNDED_BAL, 500)
+  expect_equal(out$UNRESOLVED_ENTRIES, 0L)
+  expect_equal(out$CPR, 0)
+  # An older loan appearing for the first time is still unresolved.
+  late$ORIGDATE <- as.Date("2023-11-15")
+  expect_warning(out <- prepay_estimate(rbind(x, late)), "undefined")
+  expect_equal(out$UNRESOLVED_ENTRIES, 1L)
+  expect_equal(out$FUNDED_BAL, 0)
+})
+
+test_that("exit controls are validated", {
+  x <- prepay_history()
+  for (bad in list("drop", NA_character_, c("payoff", "unresolved"), TRUE)) {
+    expect_error(prepay_estimate(x, exit_treatment = bad), "exit_treatment")
+  }
+  expect_error(prepay_estimate(x, non_prepay_exit_ids = c("a", NA)), "non_prepay_exit_ids")
+  expect_error(prepay_estimate(x, ids = FALSE, non_prepay_exit_ids = "a"), "requires 'col_loanid'")
+})
