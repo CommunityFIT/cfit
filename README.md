@@ -16,9 +16,15 @@ devtools::install_github("CommunityFIT/cfit")
 library(cfit)
 ```
 
-## Upgrading to v0.2.6
+## Upgrading to v0.2.7
 
-Key changes from 0.2.5.1:
+v0.2.7 restores prepayment speeds for loan-ID workflows. In v0.2.6, any loan
+leaving the portfolio made that period's SMM/CPR `NA`, so portfolios with monthly
+payoffs returned no estimates. Exits are now counted as payoffs by default; list
+charge-offs and other non-prepayment exits in `non_prepay_exit_ids`, or set
+`exit_treatment = "unresolved"` for the strict v0.2.6 behavior.
+
+Key changes in v0.2.6 from 0.2.5.1:
 
 - Invalid inputs now error rather than being skipped or silently corrected.
 - Fixed-payment projections correctly include prepayments in total principal.
@@ -93,32 +99,53 @@ prepay_results[c("EFFDATE", "TYPECODE", "SMM_RAW", "SMM", "CPR",
 `SMM_ADJUSTED` identifies bounding. Non-positive denominators yield `NA` speeds,
 not `Inf` or `NaN`. Undefined estimates produce a summary warning.
 
-An absent loan is not automatically a payoff. This example removes loan 102
-from February while keeping the AUTO cohort:
+With loan IDs, a loan that leaves the portfolio is counted as a payoff by
+default. This example removes loan 102 from February while keeping the AUTO cohort:
 
 ```r
 incomplete_snapshots <- subset(
   loan_data, !(LOANNUMBER == 102 & EFFDATE == as.Date("2024-02-29"))
 )
-# Expected warning: one cohort-period has an undefined estimate
 exit_results <- calculate_prepay_speed(
   incomplete_snapshots,
   group_vars = c("EFFDATE", "TYPECODE"),
   prepay_config = list(col_loanid = "LOANNUMBER")
 )
-exit_results[c("EFFDATE", "TYPECODE", "UNRESOLVED_EXITS", "CPR", "DIAGNOSTIC")]
-# February AUTO: UNRESOLVED_EXITS = 1, CPR = NA, DIAGNOSTIC = "unresolved_exits"
+exit_results[c("EFFDATE", "TYPECODE", "PAYOFF_EXITS", "SMM", "CPR", "DIAGNOSTIC")]
+# February AUTO: PAYOFF_EXITS = 1, SMM = 0.409, CPR = 0.998, DIAGNOSTIC = "ok"
 ```
 
-A disappearing cohort remains in the output with `COHORT_DISAPPEARED = TRUE`,
-unknown ending balance, and `NA` speeds. Reappearing cohorts do not reuse stale
-balances. With IDs, transfers and unexplained entrants are also flagged;
-same-month originations use approximate funding. Flagged rows bypass
-`min_begin_balance` filtering.
+Not every exit is a prepayment. Pass the IDs of charged-off, sold, or otherwise
+non-prepaid loans in `non_prepay_exit_ids`; their prior balance is removed from
+runoff and from the pool available to prepay (`EXCLUDED_EXIT_BAL`):
+
+```r
+calculate_prepay_speed(
+  incomplete_snapshots,
+  group_vars = c("EFFDATE", "TYPECODE"),
+  prepay_config = list(col_loanid = "LOANNUMBER", non_prepay_exit_ids = 102)
+)[c("EXCLUDED_EXIT_BAL", "SMM", "CPR")]
+# EXCLUDED_EXIT_BAL = 22000, SMM = 0.0231, CPR = 0.244
+```
+
+Set `exit_treatment = "unresolved"` to treat every unlisted exit as unknown, as
+v0.2.6 did: February AUTO then has `UNRESOLVED_EXITS = 1` and `CPR = NA`, with a
+summary warning.
+
+Some membership changes stay unresolved in either mode, with `NA` speeds: loans
+that move between cohorts, loans that leave and reappear in a later snapshot,
+and new loans originated before the prior month. Same-month originations, and
+prior-month originations first reported in the current snapshot, are counted in
+`FUNDED_BAL`. Flagged rows bypass `min_begin_balance` filtering.
+
+A disappearing cohort remains in the output with `COHORT_DISAPPEARED = TRUE`.
+With IDs, if every loan in it left as a payoff or listed exit, it ends at a zero
+balance; otherwise its ending balance and speeds are unknown. Reappearing cohorts
+do not reuse stale balances.
 
 Without IDs, individual exits within a surviving cohort cannot be detected.
 `DIAGNOSTIC = "ok"` means no issue was detected, not that attribution is certain.
-Do not treat undefined estimates as zero or missing loans as confirmed payoffs.
+Do not treat undefined estimates as zero.
 
 #### Custom Column Names
 
@@ -359,7 +386,7 @@ See `?calculate_duration` and `?calculate_wal` for options.
 
 ## Roadmap
 
-Planned improvements after v0.2.6 include:
+Planned improvements after v0.2.7 include:
 
 - Balloon and interest-only loan schedules, including commercial loans
 - A configurable month-end payment-date convention

@@ -1,3 +1,30 @@
+# cfit 0.2.7
+
+## Historical prepayment: exits are payoffs by default
+
+v0.2.6 marked every period in which a loan left the portfolio as unresolved
+when `col_loanid` was supplied. Payoffs are the runoff SMM measures, so real
+portfolios returned `NA` SMM/CPR for every period with a summary warning.
+
+* New `prepay_config$exit_treatment`. The default, `"payoff"`, counts a loan
+  that leaves the portfolio and does not reappear later as a payoff. Use
+  `"unresolved"` for the strict v0.2.6 behavior.
+* New `prepay_config$non_prepay_exit_ids`: loan IDs whose exits are not
+  prepayments (charge-offs, sales, transfers out of the data). Their prior
+  balance is removed from `ACTUAL_PRIN` and from `AVAILABLE_TO_PREPAY`. This
+  requires `col_loanid`.
+* New output columns `PAYOFF_EXITS` and `EXCLUDED_EXIT_BAL`. `UNRESOLVED_EXITS`
+  now counts only exits that could not be treated as payoffs.
+* Cohort transfers, and loans that leave and later reappear, remain
+  unresolved in either mode.
+* With loan IDs, a loan originated in the prior month that first appears in the
+  current snapshot (for example, funded after the month-end extract) is counted
+  in `FUNDED_BAL` instead of being flagged as an unresolved entry.
+* With loan IDs, a cohort whose loans all left as payoffs or listed exits ends
+  at a zero balance instead of being flagged `cohort_disappeared`.
+* Without loan IDs, results are unchanged from v0.2.6.
+* The undefined-estimate warning now reads "Inspect DIAGNOSTIC for the cause."
+
 # cfit 0.2.6
 
 This release completes the reliable-core updates. See the README migration

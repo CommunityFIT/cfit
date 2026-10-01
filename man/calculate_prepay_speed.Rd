@@ -10,7 +10,8 @@ calculate_prepay_speed(
   prepay_config = list(col_effdate = "EFFDATE", col_origdate = "ORIGDATE", col_typecode =
     "TYPECODE", col_balance = "BAL", col_orig_balance = "ORIGBAL", col_payment =
     "PAYAMT", col_rate = "CURRINTRATE", col_interest_basis = NULL, col_loanid = NULL,
-    interest_basis = 365, allow_negative_prepay = FALSE, min_begin_balance = 0),
+    interest_basis = 365, allow_negative_prepay = FALSE, min_begin_balance = 0,
+    exit_treatment = "payoff", non_prepay_exit_ids = NULL),
   verbose = FALSE
 )
 }
@@ -49,6 +50,14 @@ Ignored if \code{col_interest_basis} is specified (default: 365)}
 SMM/CPR values. If FALSE, negative values are floored at 0 (default: FALSE)}
 \item{\code{min_begin_balance}}{Numeric threshold for minimum beginning balance.
 Diagnostic-free cohorts below this value are excluded; flagged rows are retained (default: 0)}
+\item{\code{exit_treatment}}{How loans that leave the portfolio are treated when
+\code{col_loanid} is supplied. \code{"payoff"} (default) counts them as voluntary
+runoff, the usual treatment for snapshots of active loans. \code{"unresolved"}
+withholds the estimate for any period with an exit, as in v0.2.6.}
+\item{\code{non_prepay_exit_ids}}{Optional vector of loan IDs whose exits are not
+prepayments (e.g., charge-offs, sales, transfers out of the data). Their prior
+balance is removed from both runoff and the pool available to prepay.
+Requires \code{col_loanid} (default: NULL)}
 }}
 
 \item{verbose}{Logical indicating whether to print informational messages
@@ -61,17 +70,24 @@ Data frame with columns:
 \item{\code{BEGIN_BAL}}{Beginning loan balance for the period}
 \item{\code{END_BAL}}{Ending loan balance for the period}
 \item{\code{SCHED_PRIN_TOTAL}}{Total scheduled principal for the period}
-\item{\code{FUNDED_BAL}}{Loans funded during the period (new originations, approximate)}
+\item{\code{FUNDED_BAL}}{Loans funded during the period (new originations, approximate).
+With loan IDs, includes prior-month originations first reported in this snapshot}
 \item{\code{ACTUAL_PRIN}}{Principal inferred from snapshots; NA when attribution is unresolved}
 \item{\code{PREPAYMENT}}{Principal paid in excess of scheduled amount}
 \item{\code{SMM}}{Bounded SMM used for CPR: \verb{[0, 1]}, or \verb{[-1, 1]} when negative prepayment is allowed}
 \item{\code{CPR}}{1 - (1 - SMM)^12; may be negative when allowed; NA for undefined estimates}
-\item{\code{AVAILABLE_TO_PREPAY}}{Beginning balance minus scheduled principal, before any bounding}
+\item{\code{AVAILABLE_TO_PREPAY}}{Beginning balance minus scheduled principal and
+EXCLUDED_EXIT_BAL, before any bounding}
 \item{\code{SMM_RAW}}{Unbounded prepayment estimate; NA for unresolved attribution or a non-positive denominator}
 \item{\code{SMM_ADJUSTED}}{Whether SMM differs from SMM_RAW; NA when undefined}
 \item{\code{COHORT_DISAPPEARED}}{Cohort present in the prior snapshot but absent in the current one}
-\item{\code{UNRESOLVED_EXITS}}{Count of prior cohort loans absent from the current cohort; NA without loan IDs}
-\item{\code{UNRESOLVED_ENTRIES}}{Count of cohort entrants not originated in the reporting month; NA without loan IDs}
+\item{\code{UNRESOLVED_EXITS}}{Count of prior cohort loans absent from the current cohort that
+could not be treated as payoffs (cohort transfers, loans that reappear later, or every
+exit when \code{exit_treatment = "unresolved"}); NA without loan IDs}
+\item{\code{PAYOFF_EXITS}}{Count of loans that left the portfolio and are counted as payoffs; NA without loan IDs}
+\item{\code{EXCLUDED_EXIT_BAL}}{Prior balance of exits listed in \code{non_prepay_exit_ids}}
+\item{\code{UNRESOLVED_ENTRIES}}{Count of cohort entrants not originated in the reporting or
+prior month, including transfers in; NA without loan IDs}
 \item{\code{DIAGNOSTIC}}{Semicolon-separated flags, or "ok" when no issue was detected}
 }
 }
@@ -87,16 +103,23 @@ for different financial institution systems.
 Reporting dates must cover consecutive calendar months with one date per month.
 Missing whole-portfolio months raise an error. Cohorts are compared only with
 the immediately preceding snapshot. Disappeared cohorts remain in the output
-with unknown END_BAL and speeds, rather than being assumed paid off. A new or
+with unknown END_BAL and speeds, unless loan IDs show that every loan left as
+a payoff or listed non-prepayment exit (see below). A new or
 reappearing cohort has unknown BEGIN_BAL and speeds for that observation.
 
-With loan IDs, changes in cohort membership are flagged. Exits may represent
-payoffs, charge-offs, sales, transfers, or missing records. Entries other than
-same-month originations are also unresolved. These rows have NA ACTUAL_PRIN,
-PREPAYMENT, SMM_RAW, SMM, and CPR. Same-month originations retain the existing
-approximate funding treatment. Without IDs, individual exits and transfers
-cannot be detected; "ok" is not proof that all runoff was voluntary prepayment.
-No disappearance after the final supplied snapshot can be detected.
+With loan IDs, changes in cohort membership are classified. A loan that leaves
+the portfolio and does not reappear in a later snapshot is counted as a payoff
+(PAYOFF_EXITS) under the default \code{exit_treatment = "payoff"}. List
+charge-offs, sales, and other non-prepayment exits in
+\code{non_prepay_exit_ids} to remove their balance from runoff and from the pool.
+A cohort whose loans all left this way ends at a zero balance. Cohort
+transfers, loans that later reappear, and entrants originated before the prior
+month are unresolved: those rows have NA ACTUAL_PRIN, PREPAYMENT, SMM_RAW, SMM,
+and CPR. Same-month originations, and prior-month originations first reported
+in this snapshot, are counted as funding. Set \code{exit_treatment =
+"unresolved"} to treat every unlisted exit as unresolved. Without IDs,
+individual exits and transfers cannot be detected; "ok" is not proof that all
+runoff was voluntary prepayment.
 
 DIAGNOSTIC flags are cohort_disappeared, no_prior_cohort, unresolved_exits,
 unresolved_entries, invalid_denominator, nonfinite_estimate,
@@ -108,14 +131,14 @@ retain flags in the output. Diagnostic rows bypass min_begin_balance filtering.
 
 SMM_RAW measures the monthly prepayment rate relative to the pool available to prepay
 (beginning balance minus scheduled principal):
-\deqn{SMM = \frac{PREPAYMENT}{BEGIN\_BAL - SCHED\_PRIN\_TOTAL}}{SMM = PREPAYMENT / (BEGIN_BAL - SCHED_PRIN_TOTAL)}
+\deqn{SMM = \frac{PREPAYMENT}{BEGIN\_BAL - SCHED\_PRIN\_TOTAL - EXCLUDED\_EXIT\_BAL}}{SMM = PREPAYMENT / (BEGIN_BAL - SCHED_PRIN_TOTAL - EXCLUDED_EXIT_BAL)}
 
 This ratio is retained as SMM_RAW; SMM is its bounded value.
 CPR annualizes SMM using the standard conversion formula:
 \deqn{CPR = 1 - (1 - SMM)^{12}}{CPR = 1 - (1 - SMM)^12}
 
-Principal flow calculation accounts for new originations:
-\deqn{ACTUAL\_PRIN = BEGIN\_BAL - END\_BAL + FUNDED\_BAL}
+Principal flow calculation accounts for new originations and listed non-prepayment exits:
+\deqn{ACTUAL\_PRIN = BEGIN\_BAL - END\_BAL + FUNDED\_BAL - EXCLUDED\_EXIT\_BAL}
 
 \strong{Scheduled Principal Calculation:}
 
