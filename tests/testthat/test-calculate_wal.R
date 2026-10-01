@@ -136,16 +136,10 @@ test_that("calculate_wal errors when principal column is all NA", {
 })
 
 # Test 8: Handles missing values in some rows ----
-test_that("calculate_wal handles partial missing data", {
+test_that("calculate_wal rejects partial missing data", {
   cash_flows <- create_test_cash_flows_wal()
-
-  # Set some rows to NA
   cash_flows$total_principal[1:3] <- NA_real_
-
-  result <- calculate_wal(cash_flows)
-
-  expect_s3_class(result, "data.frame")
-  expect_true(result$portfolio_wal > 0)
+  expect_error(calculate_wal(cash_flows), "total_principal.*missing data")
 })
 
 # Test 9: Errors when no valid rows remain ----

@@ -25,8 +25,9 @@ after applying investor_share percentage
 }}
 
 \item{validate_month_index}{Logical. If TRUE (default), errors when the month
-column does not begin at 1 or is not contiguous. Set FALSE to analyse a
-deliberately offset or filtered projection window.}
+column for any individual loan does not begin at 1 or is not contiguous.
+Set FALSE to analyse a deliberately offset or filtered projection window.
+Duplicate loan-month records and invalid data are always rejected.}
 }
 \value{
 A single-row data frame with portfolio-level metric:
@@ -41,6 +42,16 @@ average time (in years) until principal is repaid, weighted by the amount
 of principal in each payment.
 }
 \details{
+Input must be non-empty and use one common eff_date across the portfolio.
+IDs and dates must be valid and non-missing; the selected cash-flow amounts
+must be finite, non-negative numbers. Missing rows are never silently removed.
+Month indices must be finite positive integers, unique within each loan;
+loans may have different final months and input rows may be unordered.
+Zero-weight loans continue to be excluded with a warning.
+Timing is determined by month / 12, not by actual calendar day counts.
+The sequence check cannot detect a missing final payment without contractual
+maturity information; an incomplete projection can still produce a metric.
+
 WAL measures the time-weighted principal repayments and does not include
 interest payments or apply discounting. Unlike duration, WAL is not sensitive
 to interest rates—it purely reflects the timing and amount of principal

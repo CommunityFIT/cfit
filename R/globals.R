@@ -11,6 +11,7 @@ utils::globalVariables(c(
   "pv",
   "pv_weighted_time",
   "loan_pv",
+  "loan_modified_duration",
   "convexity_term",
   "weighted_principal",
   "weighted_principal_sum",

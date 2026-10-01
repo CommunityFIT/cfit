@@ -343,6 +343,25 @@ For more details, see `?calculate_cash_flows`.
 
 Measure interest rate risk and principal repayment timing using the projected cash flows.
 
+**Validation and sensitivity conventions (development version)**
+
+Both analytics functions require non-empty cash flows with a common `eff_date`,
+valid IDs and dates, and finite non-negative selected amounts. Invalid rows now
+raise errors instead of being silently removed. Month indices must be positive
+integers, unique within each loan, and contiguous from 1 for each loan. Loans can
+have different maturities. Use `validate_month_index = FALSE` only for a
+purposefully offset or filtered window; it does not permit duplicate records or
+invalid data. A missing final payment cannot be detected from the month sequence
+alone, so check projection completeness and maturity warnings as well.
+
+When `discount_rate = NULL`, duration uses the loan rates and applies the
+modified-duration and convexity adjustments before aggregation. The resulting
+sensitivities describe a parallel shift in discount rates with cash flows held
+fixed. These two metrics may change from prior versions for mixed-rate portfolios;
+PV, Macaulay duration, WAL, and common-rate sensitivities remain unchanged for
+valid inputs. Duration requires finite non-negative rates. Timing remains
+`month / 12`; payment-date conventions have not changed.
+
 **Duration Analysis**
 
 Calculate Macaulay duration, modified duration, and analytical convexity:
@@ -360,7 +379,7 @@ duration_results <- calculate_duration(
 
 print(duration_results)
 #portfolio_pv macaulay_duration modified_duration analytical_convexity
-#     88341.55          1.861414           1.85187             5.037683
+#     88341.55          1.861414          1.851849             5.037529
 
 # Interpretation:
 # - Macaulay Duration (1.86 years): Average time to receive cash flows

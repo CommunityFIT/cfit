@@ -4,10 +4,9 @@
 # frozen in v0.2.5.1 after the month-index timing correction.
 #
 # Inputs and expectations are both read from disk. Nothing here regenerates a
-# fixture. If a test fails, either the behaviour changed unintentionally (fix
-# the code) or deliberately (re-run
-# golden/make_duration_wal_fixtures.R as its own commit, and record the
-# reason in NEWS).
+# fixture. Heterogeneous-rate sensitivity corrections are checked by finite
+# differences; unchanged PV, Macaulay duration, scalar-rate metrics and WAL
+# remain pinned to these historical expectations.
 #
 # The input table is frozen rather than produced by calculate_cash_flows() at
 # test time, so that an engine change cannot move these expectations. Engine
@@ -75,7 +74,7 @@ test_that("the frozen duration/WAL input table is intact", {
 })
 
 
-test_that("calculate_duration reproduces the v0.2.5.1 golden masters", {
+test_that("duration preserves golden metrics except corrected loan-rate sensitivities", {
   gi    <- read_golden_input()
   cases <- duration_golden_cases()
 
@@ -86,8 +85,19 @@ test_that("calculate_duration reproduces the v0.2.5.1 golden masters", {
     golden  <- readRDS(gf)
     current <- do.call(calculate_duration, c(list(gi), cases[[nm]]))
 
-    expect_equal(current, golden, tolerance = 1e-8,
-                 info = paste("duration golden case:", nm))
+    if (is.null(cases[[nm]]$discount_rate)) {
+      stable <- c("portfolio_pv", "macaulay_duration")
+      expect_equal(current[stable], golden[stable], tolerance = 1e-8)
+      price <- function(shift) sum(gi[[cases[[nm]]$cash_flow_column]] /
+                                    (1 + (gi$rate + shift) / 12)^gi$month)
+      h <- 1e-4
+      p0 <- price(0); up <- price(h); down <- price(-h)
+      expect_lt(abs(current$modified_duration - (down - up) / (2 * h * p0)), 1e-6)
+      expect_lt(abs(current$analytical_convexity - (up + down - 2 * p0) / (h^2 * p0)), 1e-4)
+    } else {
+      expect_equal(current, golden, tolerance = 1e-8,
+                   info = paste("duration golden case:", nm))
+    }
   }
 })
 
