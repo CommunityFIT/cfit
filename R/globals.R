@@ -1,6 +1,8 @@
 # Global variables for R CMD check
 utils::globalVariables(c(
   "LOAN_ID",
+  "SMM_RAW", "SMM_ADJUSTED", "COHORT_DISAPPEARED",
+  "UNRESOLVED_EXITS", "UNRESOLVED_ENTRIES", "DIAGNOSTIC",
   "rate",
   "eff_date",
   "date",

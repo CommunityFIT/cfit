@@ -41,6 +41,7 @@ library(cfit)
 
 # Sample loan portfolio data (two months of snapshots)
 loan_data <- data.frame(
+  LOANNUMBER = rep(c(101, 102, 103), 2),
   EFFDATE = as.Date(c(
     "2024-01-31", "2024-01-31", "2024-01-31",
     "2024-02-29", "2024-02-29", "2024-02-29"
@@ -59,31 +60,69 @@ loan_data <- data.frame(
 # Calculate monthly prepayment speeds
 prepay_results <- calculate_prepay_speed(
   df = loan_data,
-  group_vars = c("EFFDATE", "TYPECODE")
+  group_vars = c("EFFDATE", "TYPECODE"),
+  prepay_config = list(col_loanid = "LOANNUMBER")
 )
 
 prepay_results
 ```
 
+#### Snapshot Diagnostics (development version)
+
+Snapshots must cover consecutive calendar months, with one reporting date per
+month. Missing months raise errors. Inspect diagnostics before using estimates
+as projection assumptions:
+
+```r
+prepay_results[c("EFFDATE", "TYPECODE", "SMM_RAW", "SMM", "CPR",
+                 "SMM_ADJUSTED", "DIAGNOSTIC")]
+```
+
+`SMM_RAW` is the unbounded estimate. `SMM` is the bounded value used for CPR:
+`[0, 1]` by default, or `[-1, 1]` with `allow_negative_prepay = TRUE`.
+`SMM_ADJUSTED` identifies bounding. Non-positive denominators yield `NA` speeds,
+not `Inf` or `NaN`. Undefined estimates produce a summary warning.
+
+An absent loan is not automatically a payoff. This example removes loan 102
+from February while keeping the AUTO cohort:
+
+```r
+incomplete_snapshots <- subset(
+  loan_data, !(LOANNUMBER == 102 & EFFDATE == as.Date("2024-02-29"))
+)
+# Expected warning: one cohort-period has an undefined estimate
+exit_results <- calculate_prepay_speed(
+  incomplete_snapshots,
+  group_vars = c("EFFDATE", "TYPECODE"),
+  prepay_config = list(col_loanid = "LOANNUMBER")
+)
+exit_results[c("EFFDATE", "TYPECODE", "UNRESOLVED_EXITS", "CPR", "DIAGNOSTIC")]
+# February AUTO: UNRESOLVED_EXITS = 1, CPR = NA, DIAGNOSTIC = "unresolved_exits"
+```
+
+A whole cohort disappearing is retained with `COHORT_DISAPPEARED = TRUE`,
+unknown ending balance, and `NA` speeds. Reappearing cohorts do not reuse stale
+beginning balances. Transfers between cohorts and unexplained entrants are also
+flagged when IDs are supplied. Same-month originations retain the approximate
+funding treatment. Flagged rows remain visible even below `min_begin_balance`.
+Without loan IDs, individual exits cannot be detected; `DIAGNOSTIC = "ok"`
+only means that these safeguards detected no issue. Resolving exits requires
+additional source data before interpreting them as voluntary prepayments.
+
 #### Data Validation
 
-Use `col_loanid` to validate that each loan appears only once per reporting period:
+Loan IDs must be non-missing and unique within each reporting date. Required
+balances, payments, and rates must be finite, non-missing, non-negative numbers.
+For example, this deliberate duplicate raises an error:
+
 ```r
-# Add loan IDs to your data
-loan_data$LOANNUMBER <- c(101, 101, 103, 101, 102, 103)
-
-# Configure to check for duplicates
-validated_config <- list(
-  col_loanid = "LOANNUMBER"  # Validates unique loans per period  
-)
-
-prepay_results <- calculate_prepay_speed(
-  df = loan_data,
+bad_data <- loan_data
+bad_data$LOANNUMBER[2] <- 101
+try(calculate_prepay_speed(
+  bad_data,
   group_vars = c("EFFDATE", "TYPECODE"),
-  prepay_config = validated_config
-)
-
-# If duplicates exist, the function will error with details:
+  prepay_config = list(col_loanid = "LOANNUMBER")
+))
 # Found 1 duplicate loan(s) within the same reporting period
 ```
 
@@ -92,7 +131,13 @@ prepay_results <- calculate_prepay_speed(
 If your data uses different column names, configure the mapping:
 ```r
 # Example: Your institution uses different column names
+your_data <- dplyr::rename(
+  loan_data, LoanID = LOANNUMBER, ReportDate = EFFDATE, OpenDate = ORIGDATE,
+  Product = TYPECODE, CurrentBalance = BAL, StartingBalance = ORIGBAL,
+  MonthlyPayment = PAYAMT, InterestRate = CURRINTRATE
+)
 custom_config <- list(
+  col_loanid = "LoanID",
   col_effdate = "ReportDate",
   col_origdate = "OpenDate",
   col_typecode = "Product",
@@ -106,7 +151,7 @@ custom_config <- list(
 
 result <- calculate_prepay_speed(
   df = your_data,
-  group_vars = c("ReportDate", "LoanType"),
+  group_vars = c("ReportDate", "Product"),
   prepay_config = custom_config
 )
 ```
