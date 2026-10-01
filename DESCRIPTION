@@ -1,17 +1,19 @@
 Package: cfit
 Title: Computational Finance Tools for Community Financial Institutions
-Version: 0.2.5.1
+Version: 0.2.6
 Authors@R: 
     person("Colin", "Paterson", , "colinlpaterson@gmail.com", role = c("aut", "cre"))
 Description: Provides transparent, reproducible computational tools for solving 
     financial problems encountered by community banks and credit unions.
     Includes functions for prepayment analysis, loan cash flow generation, 
-    and more!.
+    duration, convexity, and weighted average life analysis.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 URL: https://github.com/CommunityFIT/cfit
 BugReports: https://github.com/CommunityFIT/cfit/issues
+Depends:
+    R (>= 3.5.0)
 Imports: 
     dplyr,
     lubridate,

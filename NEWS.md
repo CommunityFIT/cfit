@@ -1,4 +1,20 @@
-# cfit (development version)
+# cfit 0.2.6
+
+This release completes the reliable-core updates. See the README migration
+notes before upgrading: stricter validation can reject previously accepted
+inputs, and unresolved historical prepayment estimates now return `NA`.
+
+## Release verification
+
+* Historical cash-flow, duration, and WAL fixtures are required: missing fixture
+  files now fail regression tests instead of silently skipping them. Existing
+  fixtures remain unchanged.
+* Declared R >= 3.5.0, the existing minimum required to read the serialized
+  regression fixtures; package builds previously added this automatically.
+* Added consolidated migration guidance covering validation, grouping, corrected
+  principal accounting, portfolio sensitivities, and prepayment diagnostics.
+* Balloon/interest-only schedules and a configurable month-end payment-date
+  convention remain future work; this release does not add them.
 
 ## Reliable core: historical prepayment safeguards
 
@@ -214,9 +230,9 @@
 
 ## Other changes
 
-* Payment dates use lubridate month arithmetic: month-end as-of dates
-  clamp (Jan 31 → Feb 28) instead of overflowing (→ Mar 3). After a
-  month-end anchor, all payments fall on month-ends.
+* Payment dates use lubridate month arithmetic, calculated from the original
+  as-of date. Invalid days clamp (Jan 31 → Feb 28) instead of overflowing
+  (→ Mar 3); month-end alignment is not enforced (Apr 30 → May 30).
 * `scheduled_payment` output column is time-varying under the new
   convention (declines with the survival factor).
 * Unnamed config elements (typically `<-` used instead of `=` inside

@@ -4,7 +4,7 @@ test_that("calculate_cash_flows reproduces v0.2.5 golden masters", {
 
   for (nm in names(cases)) {
     golden_file <- test_path("golden", paste0(nm, ".rds"))
-    skip_if_not(file.exists(golden_file), paste("missing golden:", nm))
+    expect_true(file.exists(golden_file), info = paste("missing golden:", nm))
 
     golden  <- readRDS(golden_file)
     current <- suppressWarnings(do.call(calculate_cash_flows, cases[[nm]]))
@@ -22,7 +22,7 @@ test_that("fixed-payment output preserves historical rows before the corrected p
   source(test_path("golden", "golden_fixtures.R"), local = TRUE)
   nm   <- names(golden_cases())[1]
   gf   <- test_path("golden", paste0(nm, "_legacy_fixedpay.rds"))
-  skip_if_not(file.exists(gf), paste("missing legacy golden:", nm))
+  expect_true(file.exists(gf), info = paste("missing legacy golden:", nm))
   golden <- readRDS(gf)
 
   args <- golden_cases()[[nm]]

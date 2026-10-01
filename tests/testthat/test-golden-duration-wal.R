@@ -16,7 +16,7 @@ golden_path <- function(...) test_path("golden", ...)
 
 read_golden_input <- function() {
   p <- golden_path("duration_wal_input.rds")
-  skip_if_not(file.exists(p), "missing golden input: duration_wal_input.rds")
+  expect_true(file.exists(p), info = "missing golden input: duration_wal_input.rds")
   readRDS(p)
 }
 
@@ -80,7 +80,7 @@ test_that("duration preserves golden metrics except corrected loan-rate sensitiv
 
   for (nm in names(cases)) {
     gf <- golden_path(paste0("duration_", nm, ".rds"))
-    skip_if_not(file.exists(gf), paste("missing golden:", nm))
+    expect_true(file.exists(gf), info = paste("missing golden:", nm))
 
     golden  <- readRDS(gf)
     current <- do.call(calculate_duration, c(list(gi), cases[[nm]]))
@@ -108,7 +108,7 @@ test_that("calculate_wal reproduces the v0.2.5.1 golden masters", {
 
   for (nm in names(cases)) {
     gf <- golden_path(paste0("wal_", nm, ".rds"))
-    skip_if_not(file.exists(gf), paste("missing golden:", nm))
+    expect_true(file.exists(gf), info = paste("missing golden:", nm))
 
     golden  <- readRDS(gf)
     current <- do.call(calculate_wal, c(list(gi), cases[[nm]]))
@@ -126,7 +126,7 @@ test_that("golden fixtures encode the corrected timing convention", {
   # would pass either way.
   gi <- read_golden_input()
   gf <- golden_path("duration_scalar_total.rds")
-  skip_if_not(file.exists(gf), "missing golden: duration_scalar_total")
+  expect_true(file.exists(gf), info = "missing golden: duration_scalar_total")
 
   golden <- readRDS(gf)
   y <- 0.05

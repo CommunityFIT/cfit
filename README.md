@@ -2,43 +2,55 @@
 <!-- badges: start -->
 <!-- badges: end -->
 
-cfit provides transparent, reproducible computations for financial reporting and analytics problems faced by community financial institutions (community banks and credit unions).
-
-The intended audience is financial and treasury analysts who often solve these problems in Excel on an ad hoc basis. cfit aims to standardize and automate solving these computational problems using the open source software R.
-
-cfit encourages feedback and collaboration with the long-term goal of improving trust, transparency, and efficiency in financial reporting and analytics for community financial institutions.
+cfit is an R package for financial and treasury analysts at community banks and
+credit unions. It provides reproducible loan cash flows, historical prepayment speeds,
+and portfolio analytics.
 
 ## Installation
 
-cfit is currently in active development and not yet on CRAN. You can install the development version from [GitHub](https://github.com/CommunityFIT/cfit) with:
-``` r
+Install from GitHub (not yet on CRAN):
+
+```r
 # install.packages("devtools")
-# Install from GitHub
-devtools::install_github("CommunityFIT/cfit") #From GitHub
-# Load cfit library
+devtools::install_github("CommunityFIT/cfit")
 library(cfit)
 ```
 
+## Upgrading to v0.2.6
+
+Key changes from 0.2.5.1:
+
+- Invalid inputs now error rather than being skipped or silently corrected.
+- Fixed-payment projections correctly include prepayments in total principal.
+- Modified duration and convexity are corrected for heterogeneous discount rates.
+  PV, Macaulay duration, and WAL calculations are unchanged for unchanged valid inputs.
+- Output adds `original_tier` and prepayment diagnostics. Unresolved historical
+  prepayment estimates return `NA`.
+
+Review input requirements below and [NEWS.md](NEWS.md) for migration details.
+Payment-date conventions are unchanged; balloon schedules remain future work.
+
 ## Functions
 
-### Prepayment Analysis
-- `calculate_prepay_speed()` – Calculate SMM and CPR from portfolio snapshots, with validation and configurable column mappings
-
-### Cash Flow Projection
-- `calculate_cash_flows()` – Project monthly loan-level and portfolio-level cash flows under configurable prepayment (static by tier, or a rate-responsive linear-incentive model), credit loss, and fee assumptions
-
-### Duration and WAL Analysis
-- `calculate_duration()` – Calculate Macaulay duration, modified duration, and analytical convexity for interest rate risk measurement
-- `calculate_wal()` – Calculate weighted average life (WAL) for principal repayment timing analysis
+| Function | Purpose |
+| --- | --- |
+| `calculate_prepay_speed()` | Calculate SMM and CPR from monthly snapshots |
+| `calculate_cash_flows()` | Project loan cash flows with prepayment, credit loss, and fees |
+| `calculate_duration()` | Calculate Macaulay/modified duration and analytical convexity |
+| `calculate_wal()` | Calculate weighted average life of principal repayments |
 
 ## Examples
 
 ### Prepayment Speed Calculation
 
-Here's how to calculate prepayment speeds for a sample auto loan portfolio:
-```r
-library(cfit)
+Calculate single monthly mortality (SMM) and its annualized conditional prepayment
+rate (CPR) from balance changes after scheduled principal and funding adjustments.
 
+Use consecutive monthly snapshots with one reporting date per month. Loan IDs,
+when supplied, must be non-missing and unique within each date. Required balances,
+payments, and rates must be finite, non-missing, and non-negative.
+
+```r
 # Sample loan portfolio data (two months of snapshots)
 loan_data <- data.frame(
   LOANNUMBER = rep(c(101, 102, 103), 2),
@@ -50,7 +62,7 @@ loan_data <- data.frame(
     "2023-06-15", "2023-08-20", "2023-09-10",
     "2023-06-15", "2023-08-20", "2023-09-10"
   )),
-  TYPECODE = c("AUTO", "AUTO", "AUTO", "AUTO", "AUTO", "AUTO"),
+  TYPECODE = "AUTO",
   BAL = c(18500, 22000, 15800, 17800, 21200, 15100),
   ORIGBAL = c(25000, 30000, 20000, 25000, 30000, 20000),
   PAYAMT = c(450, 520, 380, 450, 520, 380),
@@ -67,11 +79,9 @@ prepay_results <- calculate_prepay_speed(
 prepay_results
 ```
 
-#### Snapshot Diagnostics (development version)
+#### Snapshot Diagnostics
 
-Snapshots must cover consecutive calendar months, with one reporting date per
-month. Missing months raise errors. Inspect diagnostics before using estimates
-as projection assumptions:
+Inspect diagnostics before using estimates as projection assumptions:
 
 ```r
 prepay_results[c("EFFDATE", "TYPECODE", "SMM_RAW", "SMM", "CPR",
@@ -100,161 +110,64 @@ exit_results[c("EFFDATE", "TYPECODE", "UNRESOLVED_EXITS", "CPR", "DIAGNOSTIC")]
 # February AUTO: UNRESOLVED_EXITS = 1, CPR = NA, DIAGNOSTIC = "unresolved_exits"
 ```
 
-A whole cohort disappearing is retained with `COHORT_DISAPPEARED = TRUE`,
+A disappearing cohort remains in the output with `COHORT_DISAPPEARED = TRUE`,
 unknown ending balance, and `NA` speeds. Reappearing cohorts do not reuse stale
-beginning balances. Transfers between cohorts and unexplained entrants are also
-flagged when IDs are supplied. Same-month originations retain the approximate
-funding treatment. Flagged rows remain visible even below `min_begin_balance`.
-Without loan IDs, individual exits cannot be detected; `DIAGNOSTIC = "ok"`
-only means that these safeguards detected no issue. Resolving exits requires
-additional source data before interpreting them as voluntary prepayments.
+balances. With IDs, transfers and unexplained entrants are also flagged;
+same-month originations use approximate funding. Flagged rows bypass
+`min_begin_balance` filtering.
 
-#### Data Validation
-
-Loan IDs must be non-missing and unique within each reporting date. Required
-balances, payments, and rates must be finite, non-missing, non-negative numbers.
-For example, this deliberate duplicate raises an error:
-
-```r
-bad_data <- loan_data
-bad_data$LOANNUMBER[2] <- 101
-try(calculate_prepay_speed(
-  bad_data,
-  group_vars = c("EFFDATE", "TYPECODE"),
-  prepay_config = list(col_loanid = "LOANNUMBER")
-))
-# Found 1 duplicate loan(s) within the same reporting period
-```
+Without IDs, individual exits within a surviving cohort cannot be detected.
+`DIAGNOSTIC = "ok"` means no issue was detected, not that attribution is certain.
+Do not treat undefined estimates as zero or missing loans as confirmed payoffs.
 
 #### Custom Column Names
 
-If your data uses different column names, configure the mapping:
-```r
-# Example: Your institution uses different column names
-your_data <- dplyr::rename(
-  loan_data, LoanID = LOANNUMBER, ReportDate = EFFDATE, OpenDate = ORIGDATE,
-  Product = TYPECODE, CurrentBalance = BAL, StartingBalance = ORIGBAL,
-  MonthlyPayment = PAYAMT, InterestRate = CURRINTRATE
-)
-custom_config <- list(
-  col_loanid = "LoanID",
-  col_effdate = "ReportDate",
-  col_origdate = "OpenDate",
-  col_typecode = "Product",
-  col_balance = "CurrentBalance",
-  col_orig_balance = "StartingBalance",
-  col_payment = "MonthlyPayment",
-  col_rate = "InterestRate",
-  col_interest_basis = NULL,
-  interest_basis = 360  # Or 365, depending on your calculation method
-)
+Map institution-specific names through `prepay_config`; for example:
 
+```r
+your_data <- dplyr::rename(loan_data, LoanID = LOANNUMBER, ReportDate = EFFDATE)
 result <- calculate_prepay_speed(
-  df = your_data,
-  group_vars = c("ReportDate", "Product"),
-  prepay_config = custom_config
+  your_data,
+  group_vars = c("ReportDate", "TYPECODE"),
+  prepay_config = list(col_loanid = "LoanID", col_effdate = "ReportDate")
 )
 ```
 
-For more details, see `?calculate_prepay_speed`.
+See `?calculate_prepay_speed` for all column mappings and interest-basis options.
 
-### Cash Flow Projection and Portfolio Yield
+### Cash Flow Projection
 
-Generate monthly cash flow projections for a loan portfolio and calculate portfolio yield.
+Supply one row per loan with a positive finite balance, non-negative finite decimal rate,
+positive integer remaining term, and valid effective date. IDs must be unique
+and non-missing; they are generated if the implicit `LOAN_ID` column is absent
+or `col_loanid = NULL`. Invalid configuration keys or missing mapped columns error.
+Optional payment and original-balance values may be `NA` to use per-loan fallbacks;
+otherwise they must be positive and finite.
 
-**Inputs**
-- One row per loan (current snapshot)
-- Required fields: balance, rate, months to maturity, effective date
-- Optional tier classification for assumption mapping
+#### Modeling Conventions
 
-**Outputs**
-- Loan-level monthly projected cash flows
-- Optional aggregated monthly totals for portfolio analysis
+- **Prepayment:** by default, `reamortize_survivors = TRUE` treats prepayments as
+  full payoffs and re-amortizes survivors over the remaining term. Aggregate
+  scheduled payments decline with survival. Set `FALSE` for fixed-payment
+  curtailment modeling.
+- **Timing:** `eff_date` is time zero; the first payment is one month later.
+  Anchor yield calculations to `eff_date`.
+- **Interest:** accrues on starting balances by default
+  (`interest_on_starting_balance = TRUE`). Credit losses reduce principal only
+  (`credit_loss_reduces_interest = FALSE`).
+- **Order:** credit loss, scheduled principal, then prepayment on the remaining balance.
+- **Principal:** `total_principal = scheduled_principal + prepayment`.
+  Small-balance cleanup is included in scheduled principal; `scheduled_payment`
+  is the payment before final payoff adjustments.
 
-**Input validation (development version)**
+Payments below accrued interest error. Interest-only payments are accepted, but
+residual balances at maturity of at least `max(0.01, de_minimis_balance)` warn.
+No balloon is added; analytics reflect only projected collections. Balloon and
+negative-amortization schedules are not supported.
 
-`calculate_cash_flows()` rejects invalid records before projection. Supply a
-non-empty snapshot with unique, non-missing loan IDs, positive finite balances,
-non-negative finite decimal rates, positive integer remaining terms, and valid
-dates. Correct or deliberately filter invalid records before calling the function.
-Unknown or duplicated configuration keys and missing explicitly mapped columns
-raise errors. IDs are generated only when the implicit `LOAN_ID` column is absent
-or `col_loanid = NULL`.
-
-Assumption vectors must have unique tier names and finite values. PD and LGD must
-be supplied together, each within `[0, 1]`, and are matched by tier name rather
-than position. Credit costs must cover every tier in the selected prepayment
-model. Without a tier column, define a named `default` tier. Unknown or missing
-loan tiers use that default for both prepayment and credit assumptions, with a
-warning; they raise an error if no default exists. Known-tier portfolios can omit
-the default. Reordering assumption vectors does not change results.
-
-Optional payment and original-balance columns accept `NA` to request the existing
-per-loan fallback; other supplied values must be positive and finite. These checks
-do not add balloon or negative-amortization support.
-
-Supplied payments must cover each period's gross accrued interest after any
-survivor scaling. Underpayments raise an error identifying the loan and month.
-Interest-only payments are accepted, but the engine warns when loans retain
-balances at maturity of at least `max(0.01, de_minimis_balance)`. The warning
-reports affected IDs and total residual principal; it does not add a balloon.
-PV and WAL calculated from these projections describe only the collections
-actually projected.
-
-Small-balance cleanup is reported as additional `scheduled_principal`, so
-`total_principal = scheduled_principal + prepayment` in both conventions.
-`scheduled_payment` remains the payment before final payoff adjustments.
-The fixed-payment convention now includes all prepayments in total principal;
-this corrects a cap that could delay or omit principal near payoff.
-
-**Modeling conventions (v0.2.5+)**
-
-- **Prepayments are full payoffs** (`reamortize_survivors = TRUE`, default):
-  each month, an SMM-derived fraction of loans pays off entirely and the
-  surviving balance re-amortizes over the remaining term. Aggregate scheduled
-  payments decline with the survival factor, consistent with market/Bloomberg
-  pool conventions. Set `reamortize_survivors = FALSE` for legacy
-  fixed-payment (curtailment) behavior, appropriate only for modeling
-  individual borrowers who keep their original payment while paying extra
-  principal.
-- **Payment timing**: `eff_date` is the t = 0 valuation/settlement anchor;
-  the first projected payment falls one month later. When calculating yield,
-  always anchor `start_date` to the effective date from the loan data (as the
-  example below does) — never to the first cash flow date.
-- **Interest accrual**: full-month interest accrues on the starting balance
-  (`interest_on_starting_balance = TRUE`, default), matching standard
-  monthly-pay consumer loan servicing.
-- **Credit losses** reduce principal balances only
-  (`credit_loss_reduces_interest = FALSE`, default); deducting charge-offs
-  from interest as well would double-count the loss.
-- **Application order** within each month: credit loss, then scheduled
-  principal, then prepayment (SMM applied to the post-scheduled balance).
-
-**Grouping and original classifications (development version)**
-
-Loan cash flows include `original_tier` (the configured input classification) and
-`tier` (the assumptions actually used). For example, a Commercial-C loan using
-fallback assumptions retains `original_tier = "Commercial-C"` while
-`tier = "default"`. Without `col_tier`, `original_tier` is `NA`.
-
-The tier example below demonstrates grouping by original classification and
-inspecting fallback assumptions.
-
-Grouping retains missing values and must preserve portfolio totals. Missing
-grouping columns now raise errors, including when only loan-level output is
-requested. Generated grouping fields are `LOAN_ID`, `eff_date`, `rate`, `tier`,
-`original_tier`, `month`, and `date`; cash-flow amount columns cannot be keys.
-Rename input classifications that conflict with generated names unless they
-are the corresponding configured source column. In particular, `date` always
-means projected payment date, not an input reporting or origination date.
-
+#### Basic Projection
 
 ```r
-# Optional: used here only to demonstrate portfolio yield calculation
-# FinCal is not a dependency of cfit
-install_github("felixfan/FinCal")
-library(FinCal)
-
 # Sample loan portfolio snapshot
 loan_portfolio <- data.frame(
   LOAN_ID = c("L001", "L002", "L003"),
@@ -277,8 +190,16 @@ results <- calculate_cash_flows(loan_portfolio, config)
 
 # View aggregated monthly totals
 head(results$monthly_totals)
+```
 
-# Calculate portfolio yield
+#### Portfolio Yield (Optional)
+
+This example uses the separate FinCal package:
+
+```r
+# devtools::install_github("felixfan/FinCal")
+library(FinCal)
+
 pool_cfs <- data.frame(
   date = results$monthly_totals$date,
   amount = results$monthly_totals$investor_total  # Net cash flow to owner
@@ -287,10 +208,8 @@ pool_cfs <- data.frame(
 portfolio_yield <- yield.actual(
   cf = pool_cfs,
   pv = sum(loan_portfolio$balance),
-  start_date = min(loan_portfolio$eff_date),  # anchor = effective date (t = 0),
-                                              # NOT the first cash flow date
-  compounding = "monthly"    # use "semiannual" for bond-equivalent yield
-                             # comparable to Bloomberg quotes
+  start_date = min(loan_portfolio$eff_date),
+  compounding = "monthly"  # "semiannual" for bond-equivalent yield
 )
 
 print(paste("Portfolio Yield:", round(portfolio_yield * 100, 2), "%"))
@@ -298,7 +217,10 @@ print(paste("Portfolio Yield:", round(portfolio_yield * 100, 2), "%"))
 
 #### Tier-Based Assumptions
 
-Use different CPR and credit cost assumptions by loan tier:
+Assumption vectors require unique tier names and finite values. Credit costs must
+cover every active prepayment tier. Alternatively, supply PD and LGD together
+with matching tier names and values in `[0, 1]`; they are matched by name.
+
 ```r
 # Portfolio with tier classifications
 loan_portfolio_tiered <- data.frame(
@@ -324,8 +246,11 @@ cash_flows_tiered <- calculate_cash_flows(loan_portfolio_tiered, config_tiered)
 unique(cash_flows_tiered[c("LOAN_ID", "original_tier", "tier")])
 ```
 
-All input tiers are defined above, so no `default` is needed. To summarize cash
-flows by original classification, request monthly totals:
+`original_tier` retains the input classification; `tier` identifies the assumptions
+used. All tiers above match, so no `default` is needed. Without `col_tier`,
+`original_tier` is `NA` and a named `default` is required.
+
+To aggregate by original classification:
 
 ```r
 config_grouped <- config_tiered
@@ -336,8 +261,8 @@ results_tiered <- calculate_cash_flows(loan_portfolio_tiered, config_grouped)
 head(results_tiered$monthly_totals)
 ```
 
-If a classification has no explicit assumptions, define a named `default` in
-both vectors. Here C retains its classification but uses default assumptions:
+Unknown or missing tiers use a named `default` with a warning, or error if it is
+absent. Here C retains its classification while using default assumptions:
 
 ```r
 config_fallback <- config_grouped
@@ -355,13 +280,19 @@ unique(results_fallback$loan_cash_flows[c("LOAN_ID", "original_tier", "tier")])
 # L004    C             default
 ```
 
-This example gives C the same rates through the default, so its projected cash
-flows are unchanged. Grouping by `original_tier` keeps C separate; grouping by
-`tier` combines it with any other loans using default assumptions.
+C's rates and cash flows are unchanged. Grouping by `original_tier` keeps C
+separate; grouping by `tier` combines loans using the same assumptions.
+
+Grouping retains missing values and preserves totals. Keys may be loan metadata
+or generated fields (`LOAN_ID`, `eff_date`, `rate`, `tier`, `original_tier`, `month`,
+`date`), but not cash-flow amounts. Missing keys error in either return mode.
+Rename conflicting input columns unless explicitly mapped to the corresponding
+field; `date` always means projected payment date.
 
 #### Rate-Responsive Prepayment (Linear Incentive)
 
-Instead of fixed CPR assumptions, derive each loan's prepayment speed from its *rate incentive* — the gap between its coupon and the current market rate. As market rates fall, in-the-money borrowers prepay faster:
+The linear-incentive model derives CPR from the gap between the loan's coupon
+and the market rate. With positive `beta`, lower market rates increase CPR:
 
 ```r
 # Same tiered portfolio as above
@@ -381,125 +312,66 @@ config_incentive <- list(
 cash_flows_incentive <- calculate_cash_flows(loan_portfolio_tiered, config_incentive)
 ```
 
-
 For more details, see `?calculate_cash_flows`.
 
 ### Duration and WAL Analysis
 
-Measure interest rate risk and principal repayment timing using the projected cash flows.
+Use loan-level cash flows with a common `eff_date`, valid IDs/dates, and finite
+non-negative amounts (and rates for duration). Each loan's month indices must be
+unique and contiguous from 1; different maturities are allowed.
+`validate_month_index = FALSE` permits intentional gaps or offsets, but not
+duplicates or invalid data. Check maturity warnings too: a missing final payment
+cannot be detected from the month sequence alone.
 
-**Validation and sensitivity conventions (development version)**
+Timing is `month / 12`. Duration defaults to each loan's rate; use
+`discount_rate = 0.05`, for example, for a common 5% rate. Sensitivities measure
+parallel discount-rate shifts with cash flows held fixed.
 
-Both analytics functions require non-empty cash flows with a common `eff_date`,
-valid IDs and dates, and finite non-negative selected amounts. Invalid rows now
-raise errors instead of being silently removed. Month indices must be positive
-integers, unique within each loan, and contiguous from 1 for each loan. Loans can
-have different maturities. Use `validate_month_index = FALSE` only for a
-purposefully offset or filtered window; it does not permit duplicate records or
-invalid data. A missing final payment cannot be detected from the month sequence
-alone, so check projection completeness and maturity warnings as well.
-
-When `discount_rate = NULL`, duration uses the loan rates and applies the
-modified-duration and convexity adjustments before aggregation. The resulting
-sensitivities describe a parallel shift in discount rates with cash flows held
-fixed. These two metrics may change from prior versions for mixed-rate portfolios;
-PV, Macaulay duration, WAL, and common-rate sensitivities remain unchanged for
-valid inputs. Duration requires finite non-negative rates. Timing remains
-`month / 12`; payment-date conventions have not changed.
-
-**Duration Analysis**
-
-Calculate Macaulay duration, modified duration, and analytical convexity:
 ```r
-library(cfit)
-
-# Using cash flows from previous example
 cash_flows <- results$loan_cash_flows
+duration_results <- calculate_duration(cash_flows, include_convexity = TRUE)
+wal_results <- calculate_wal(cash_flows)
 
-# Calculate duration metrics
-duration_results <- calculate_duration(
-  loan_cash_flows = cash_flows,
-  include_convexity = TRUE
-)
-
-print(duration_results)
-#portfolio_pv macaulay_duration modified_duration analytical_convexity
+duration_results
+# portfolio_pv macaulay_duration modified_duration analytical_convexity
 #     88341.55          1.861414          1.851849             5.037529
 
-# Interpretation:
-# - Macaulay Duration (1.86 years): Average time to receive cash flows
-# - Modified Duration (1.85): Portfolio value changes ~1.85% for 1% rate change
-# - Convexity (5.04): Measures curvature of price-yield relationship
-```
-
-**Weighted Average Life Analysis**
-
-Calculate WAL to understand principal repayment timing:
-```r
-# Calculate weighted average life
-wal_results <- calculate_wal(
-  loan_cash_flows = cash_flows
-)
-
-print(wal_results)
+wal_results
 # portfolio_wal
 #      2.020745
-
-# Interpretation: 
-# Principal is repaid in an average of 2.02 years
 ```
 
-**Compare Gross vs Net Metrics**
+- **Macaulay duration (1.86 years):** present-value-weighted time to receive cash flows.
+- **Modified duration (1.85):** approximately a 1.85% value decline for a
+  one-percentage-point rate increase, before convexity effects.
+- **Convexity (5.04):** curvature of the price–yield relationship.
+- **WAL (2.02 years):** principal-weighted time to repayment.
 
-Analyze both total cash flows and investor's economic interest:
+Defaults use gross payments and principal. To analyze investor cash flows after
+fees and ownership share:
+
 ```r
-# Gross portfolio metrics (full cash flows)
-duration_gross <- calculate_duration(
-  cash_flows,
-  cash_flow_column = "total_payment"
-)
-
-wal_gross <- calculate_wal(
-  cash_flows,
-  principal_column = "total_principal"
-)
-
-# Net investor metrics (after fees and investor share)
-duration_net <- calculate_duration(
-  cash_flows,
-  cash_flow_column = "investor_total"
-)
-
-wal_net <- calculate_wal(
-  cash_flows,
-  principal_column = "investor_principal"
-)
-
-# Compare results
-cat("Gross Duration:", duration_gross$macaulay_duration, "years\n")
-cat("Net Duration:", duration_net$macaulay_duration, "years\n")
-cat("Gross WAL:", wal_gross$portfolio_wal, "years\n")
-cat("Net WAL:", wal_net$portfolio_wal, "years\n")
+duration_net <- calculate_duration(cash_flows, cash_flow_column = "investor_total")
+wal_net <- calculate_wal(cash_flows, principal_column = "investor_principal")
 ```
 
-For more details, see `?calculate_duration` and `?calculate_wal`.
+See `?calculate_duration` and `?calculate_wal` for options.
 
 ## Roadmap
 
-Planned improvements include:
+Planned improvements after v0.2.6 include:
 
-- `calculate_effective_duration()` — interest-rate sensitivity under parallel rate shocks (e.g. ±100 bps), using the rate-responsive cash flows introduced in v0.2.4
+- Balloon and interest-only loan schedules, including commercial loans
+- A configurable month-end payment-date convention
+- Effective duration with rate-responsive cash flows under parallel rate shocks
 
 ## Contributing
 
-This is an open-source project built for the community banking sector. Feedback, suggestions, and contributions are welcome! 
+Report bugs and feature requests through [GitHub Issues](https://github.com/CommunityFIT/cfit/issues),
+or ask questions in [Discussions](https://github.com/CommunityFIT/cfit/discussions).
 
-- Report bugs or request features via [GitHub Issues](https://github.com/CommunityFIT/cfit/issues)
-- Questions? Start a [Discussion](https://github.com/CommunityFIT/cfit/discussions)
-
-## About CommunityFIT
-
-cfit is part of the CommunityFIT initiative - open-source computational finance tools for community financial institutions. Learn more at [github.com/CommunityFIT](https://github.com/CommunityFIT).
+cfit is part of [CommunityFIT](https://github.com/CommunityFIT), an open-source
+initiative for community financial institutions.
 
 ## License
 
