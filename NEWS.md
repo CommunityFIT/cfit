@@ -1,5 +1,27 @@
 # cfit (development version)
 
+## Reliable core: portfolio analytics
+
+* `calculate_duration()` and `calculate_wal()` now validate month sequences
+  separately for each loan. Another loan can no longer conceal a missing month.
+  Duplicate loan-month records always error, including with
+  `validate_month_index = FALSE`. That option only permits intentional gaps or
+  offset windows; positive integer indices are still required.
+* Invalid required data now raises an error rather than silently dropping rows.
+  Inputs must be non-empty, identifiers and dates valid, selected cash-flow
+  amounts finite and non-negative, and all rows must share one `eff_date`.
+  Duration also requires finite non-negative rates. Zero-weight loans retain
+  their existing warning/exclusion behavior.
+* Modified duration and analytical convexity now apply each cash flow's own
+  discount-rate adjustment before portfolio aggregation. With heterogeneous
+  rates and `discount_rate = NULL`, these sensitivities may change. PV,
+  Macaulay duration, WAL, and common-rate sensitivities are unchanged for valid
+  inputs. This is fixed-cash-flow sensitivity, not effective duration.
+* Independent finite-difference and closed-form tests verify the correction.
+  Historical fixtures have not been regenerated: unchanged metrics remain
+  pinned, and heterogeneous-rate sensitivities are verified independently.
+  README example metrics are updated. Payment-date conventions are unchanged.
+
 ## Reliable core: safe grouping and aggregation
 
 * Loan cash flows now include `original_tier`, the configured input classification

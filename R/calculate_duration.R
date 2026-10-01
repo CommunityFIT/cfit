@@ -11,8 +11,9 @@
 #'   calculations (e.g., 0.06 for 6% per year). If NULL (default), uses each
 #'   loan's rate from the loan_cash_flows data. If a scalar, applies that rate
 #'   uniformly across all loans. When discount_rate is NULL, present values are
-#'   computed using loan-level rates, and the portfolio discount rate used in
-#'   the modified duration adjustment is the PV-weighted average loan rate.
+#'   computed using loan-level rates. Sensitivity adjustments use each cash
+#'   flow's discount rate before aggregation, rather than an average rate.
+#'   Supplied discount rates and the rate column must be finite and non-negative.
 #' @param cash_flow_column Character. Column name for cash flows to discount.
 #'   Options:
 #'   \itemize{
@@ -31,8 +32,9 @@
 #'   prepayment behavior?"
 #'
 #' @param validate_month_index Logical. If TRUE (default), errors when the month
-#'   column does not begin at 1 or is not contiguous. Set FALSE to analyse a
-#'   deliberately offset or filtered projection window.
+#'   column for any individual loan does not begin at 1 or is not contiguous.
+#'   Set FALSE to analyse a deliberately offset or filtered projection window.
+#'   Duplicate loan-month records and invalid data are always rejected.
 #'
 #' @return A single-row data frame with portfolio-level metrics:
 #'   \itemize{
@@ -44,6 +46,16 @@
 #'   }
 #'
 #' @details
+#' Input must be non-empty and use one common eff_date across the portfolio.
+#' IDs and dates must be valid and non-missing; the selected cash-flow amounts
+#' must be finite, non-negative numbers. Missing rows are never silently removed.
+#' Month indices must be finite positive integers, unique within each loan;
+#' loans may have different final months and input rows may be unordered.
+#' Zero-weight loans continue to be excluded with a warning.
+#' Timing is determined by month / 12, not by actual calendar day counts.
+#' The sequence check cannot detect a missing final payment without contractual
+#' maturity information; an incomplete projection can still produce a metric.
+#'
 #' All calculations use monthly compounding. Present values are computed as:
 #' PV_t = CF_t / (1 + y/12)^t, where y is the annual discount rate and t is
 #' time in months from eff_date. The month column is the projection index: month = 1
@@ -57,14 +69,15 @@
 #' The function calculates:
 #' \itemize{
 #'   \item Macaulay Duration = Σ(t × PV_t) / Σ(PV_t), where t is time in years
-#'   \item Modified Duration = Macaulay Duration / (1 + y/12), where y is the
-#'     discount rate and 12 represents monthly compounding
-#'   \item Analytical Convexity = Σ(PV_t × t × (t + 1/12)) / (PV × (1 + y/12)^2),
-#'     where t is in years and the formula reflects monthly compounding
+#'   \item Modified Duration = Σ(PV_t × t / (1 + y_t/12)) / Σ(PV_t)
+#'   \item Analytical Convexity = Σ(PV_t × t × (t + 1/12) / (1 + y_t/12)^2) / Σ(PV_t),
+#'     where t is in years and y_t is the annual discount rate for that cash flow
 #' }
 #'
-#' When discount_rate is NULL, the function uses a weighted average of loan rates
-#' for the modified duration calculation.
+#' These sensitivities describe a parallel shift of all discount rates with
+#' cash flows held fixed. For a common rate y, modified duration reduces to
+#' Macaulay duration / (1 + y/12). This is not effective duration: rate-dependent
+#' prepayments are not recomputed.
 #'
 #' @examples
 #' \dontrun{
@@ -91,104 +104,23 @@ calculate_duration <- function(loan_cash_flows,
                                validate_month_index = TRUE
                                ) {
 
-  # Input validation ----
-  if (!is.data.frame(loan_cash_flows)) {
-    stop("loan_cash_flows must be a data frame")
-  }
-
-  required_cols <- c("LOAN_ID", "rate", "eff_date",
-                     "date", "month", "total_payment", "investor_total")
-  missing_cols <- setdiff(required_cols, names(loan_cash_flows))
-  if (length(missing_cols) > 0) {
-    stop("loan_cash_flows is missing required columns: ",
-         paste(missing_cols, collapse = ", "))
-  }
-
-  if (!cash_flow_column %in% c("total_payment", "investor_total")) {
+  if (!is.character(cash_flow_column) || length(cash_flow_column) != 1L ||
+      is.na(cash_flow_column) || !cash_flow_column %in% c("total_payment", "investor_total")) {
     stop("cash_flow_column must be either 'total_payment' or 'investor_total'")
   }
-
   if (!is.null(discount_rate)) {
-    if (!is.numeric(discount_rate) || length(discount_rate) != 1) {
-      stop("discount_rate must be NULL or a single numeric value")
+    if (!is.numeric(discount_rate) || length(discount_rate) != 1L ||
+        !is.null(dim(discount_rate)) || !is.finite(discount_rate)) {
+      stop("discount_rate must be NULL or a single numeric value that is finite")
     }
-    if (discount_rate < 0) {
-      stop("discount_rate must be non-negative")
-    }
+    if (discount_rate < 0) stop("discount_rate must be non-negative")
   }
-
-  if (!is.logical(include_convexity) || length(include_convexity) != 1) {
-    stop("include_convexity must be TRUE or FALSE")
-  }
-
-  if (!is.logical(validate_month_index) || length(validate_month_index) != 1) {
-    stop("validate_month_index must be TRUE or FALSE")
-  }
-
-  # Ensure required columns are not all NA
-  if (all(is.na(loan_cash_flows$LOAN_ID))) {
-    stop("LOAN_ID column contains only NA values")
-  }
-
-  if (all(is.na(loan_cash_flows[[cash_flow_column]]))) {
-    stop(cash_flow_column, " column contains only NA values")
-  }
-
-  # Data preparation ----
-  # Remove rows with missing critical data
-  duration_data <- loan_cash_flows %>%
-    filter(!is.na(LOAN_ID),
-           !is.na(rate),
-           !is.na(eff_date),
-           !is.na(date),
-           !is.na(month),
-           !is.na(.data[[cash_flow_column]])) %>%
-    mutate(
-      eff_date = as.Date(eff_date),
-      date = as.Date(date)
-    )
-
-  if (nrow(duration_data) == 0) {
-    stop("No valid rows remaining after removing missing values in required columns")
-  }
-
-  # Validate date conversion succeeded ----
-  if (any(is.na(duration_data$eff_date)) || any(is.na(duration_data$date))) {
-    stop("Some date values could not be converted to Date format. Check eff_date and date columns.")
-  }
-
-  # Validate month column ----
-  if (any(duration_data$month < 1, na.rm = TRUE)) {
-    stop("month column contains values less than 1. Month must be >= 1")
-  }
-
-  if (any(duration_data$month != floor(duration_data$month), na.rm = TRUE)) {
-    stop("month column contains non-integer values. Month must be an integer >= 1")
-  }
-
-  # Projection-index guard ----
-  # Checked on the raw input, not the NA-filtered frame: a dropped row must not
-  # be able to shift the apparent start of the index.
-  if (validate_month_index) {
-    observed <- sort(unique(loan_cash_flows$month[!is.na(loan_cash_flows$month)]))
-
-    if (min(observed) != 1) {
-      stop("month index starts at ", min(observed), ", expected 1. ",
-           "As of v0.2.5.1 the month = 1 -> t = 1 month convention is handled ",
-           "internally. If this reflects the mutate(month = month + 1) workaround ",
-           "for the pre-v0.2.5.1 timing bug, remove it. To analyse a deliberately ",
-           "offset or filtered projection, set validate_month_index = FALSE.")
-    }
-
-    expected <- seq_len(max(observed))
-    if (length(observed) != length(expected) || any(observed != expected)) {
-      gaps <- setdiff(expected, observed)
-      stop("month index is not contiguous from 1. Missing month(s): ",
-           paste(gaps[seq_len(min(10L, length(gaps)))], collapse = ", "),
-           if (length(gaps) > 10L) ", ..." else "",
-           ". Set validate_month_index = FALSE to override.")
-    }
-  }
+  validate_analytics_flag(include_convexity, "include_convexity")
+  duration_data <- validate_analytics_data(
+    loan_cash_flows, cash_flow_column,
+    c("LOAN_ID", "rate", "eff_date", "date", "month", "total_payment", "investor_total"),
+    validate_month_index, check_rate = TRUE
+  )
 
   # Determine discount rate to use for each loan
   if (is.null(discount_rate)) {
@@ -217,7 +149,7 @@ calculate_duration <- function(loan_cash_flows,
     duration_data <- duration_data %>%
       mutate(
         # Convexity formula: PV * t * (t + 1/12) for monthly cash flows, expressed in years
-        convexity_term = pv * t_years * (t_years + 1/12)
+        convexity_term = pv * t_years * (t_years + 1/12) / (1 + discount_rate_used / 12)^2
       )
   }
 
@@ -225,14 +157,14 @@ calculate_duration <- function(loan_cash_flows,
   loan_level <- duration_data %>%
     group_by(LOAN_ID) %>%
     summarise(
-      loan_pv = sum(pv, na.rm = TRUE),
-      loan_duration = sum(pv_weighted_time, na.rm = TRUE) / loan_pv,
+      loan_pv = sum(pv),
+      loan_duration = sum(pv_weighted_time) / loan_pv,
       loan_convexity = if (include_convexity) {
-        sum(convexity_term, na.rm = TRUE) / loan_pv
+        sum(convexity_term) / loan_pv
       } else {
         NA_real_
       },
-      avg_discount_rate = mean(discount_rate_used, na.rm = TRUE),
+      loan_modified_duration = sum(pv_weighted_time / (1 + discount_rate_used / 12)) / loan_pv,
       .groups = "drop"
     )
 
@@ -250,29 +182,18 @@ calculate_duration <- function(loan_cash_flows,
   }
 
   # Calculate portfolio-level metrics ----
-  portfolio_pv <- sum(loan_level$loan_pv, na.rm = TRUE)
+  portfolio_pv <- sum(loan_level$loan_pv)
 
   if (portfolio_pv == 0) {
     stop("Portfolio present value is zero. Check cash flows and discount rates.")
   }
 
   macaulay_duration <- weighted.mean(loan_level$loan_duration,
-                                     loan_level$loan_pv,
-                                     na.rm = TRUE)
+                                     loan_level$loan_pv)
 
-  # For modified duration, determine the discount rate to use
-  if (is.null(discount_rate)) {
-    # Use weighted average of loan rates
-    portfolio_discount_rate <- weighted.mean(loan_level$avg_discount_rate,
-                                             loan_level$loan_pv,
-                                             na.rm = TRUE)
-  } else {
-    # Use the scalar rate provided
-    portfolio_discount_rate <- discount_rate
-  }
-
-  # Modified duration = Macaulay / (1 + y/12) where y is annual rate, 12 for monthly compounding
-  modified_duration <- macaulay_duration / (1 + portfolio_discount_rate / 12)
+  # Sensitivities to a parallel shift of the discount rates, holding cash flows
+  # fixed. Apply each discount-rate denominator before portfolio aggregation.
+  modified_duration <- weighted.mean(loan_level$loan_modified_duration, loan_level$loan_pv)
 
   # Build output ----
   result <- data.frame(
@@ -284,12 +205,14 @@ calculate_duration <- function(loan_cash_flows,
   # Add convexity if requested
   if (include_convexity) {
     # Portfolio convexity calculation with monthly compounding
-    portfolio_convexity <- sum(loan_level$loan_convexity * loan_level$loan_pv,
-                               na.rm = TRUE) /
-      (portfolio_pv * (1 + portfolio_discount_rate / 12)^2)
+    portfolio_convexity <- sum(loan_level$loan_convexity * loan_level$loan_pv) /
+      portfolio_pv
 
     result$analytical_convexity <- portfolio_convexity
   }
 
+  if (any(!is.finite(as.matrix(result)))) {
+    stop("Analytics produced non-finite results; check input magnitudes and discount rates.")
+  }
   return(result)
 }

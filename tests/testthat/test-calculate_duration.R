@@ -233,19 +233,10 @@ test_that("calculate_duration errors when cash flow column is all NA", {
 })
 
 # Test 13: Handles missing values in some rows ----
-test_that("calculate_duration handles partial missing data", {
+test_that("calculate_duration rejects partial missing data", {
   cash_flows <- create_test_cash_flows()
-
-  # Set some rows to NA
   cash_flows$total_payment[1:3] <- NA_real_
-
-  result <- calculate_duration(cash_flows)
-
-  expect_s3_class(result, "data.frame")
-  expect_true(result$portfolio_pv > 0)
-
-  # Should still work with remaining data
-  expect_true(result$macaulay_duration > 0)
+  expect_error(calculate_duration(cash_flows), "total_payment.*missing data")
 })
 
 # Test 14: Errors when no valid rows remain ----

@@ -21,8 +21,9 @@ rate, eff_date, date, month, total_payment, investor_total.}
 calculations (e.g., 0.06 for 6\% per year). If NULL (default), uses each
 loan's rate from the loan_cash_flows data. If a scalar, applies that rate
 uniformly across all loans. When discount_rate is NULL, present values are
-computed using loan-level rates, and the portfolio discount rate used in
-the modified duration adjustment is the PV-weighted average loan rate.}
+computed using loan-level rates. Sensitivity adjustments use each cash
+flow's discount rate before aggregation, rather than an average rate.
+Supplied discount rates and the rate column must be finite and non-negative.}
 
 \item{cash_flow_column}{Character. Column name for cash flows to discount.
 Options:
@@ -43,8 +44,9 @@ only and does not incorporate rate-dependent prepayment behavior. It answers
 prepayment behavior?"}
 
 \item{validate_month_index}{Logical. If TRUE (default), errors when the month
-column does not begin at 1 or is not contiguous. Set FALSE to analyse a
-deliberately offset or filtered projection window.}
+column for any individual loan does not begin at 1 or is not contiguous.
+Set FALSE to analyse a deliberately offset or filtered projection window.
+Duplicate loan-month records and invalid data are always rejected.}
 }
 \value{
 A single-row data frame with portfolio-level metrics:
@@ -62,6 +64,16 @@ convexity for a loan portfolio based on projected cash flows from
 \code{calculate_cash_flows()}.
 }
 \details{
+Input must be non-empty and use one common eff_date across the portfolio.
+IDs and dates must be valid and non-missing; the selected cash-flow amounts
+must be finite, non-negative numbers. Missing rows are never silently removed.
+Month indices must be finite positive integers, unique within each loan;
+loans may have different final months and input rows may be unordered.
+Zero-weight loans continue to be excluded with a warning.
+Timing is determined by month / 12, not by actual calendar day counts.
+The sequence check cannot detect a missing final payment without contractual
+maturity information; an incomplete projection can still produce a metric.
+
 All calculations use monthly compounding. Present values are computed as:
 PV_t = CF_t / (1 + y/12)^t, where y is the annual discount rate and t is
 time in months from eff_date. The month column is the projection index: month = 1
@@ -75,14 +87,15 @@ present value for a 1\% change in interest rates, assuming monthly compounding.
 The function calculates:
 \itemize{
 \item Macaulay Duration = Σ(t × PV_t) / Σ(PV_t), where t is time in years
-\item Modified Duration = Macaulay Duration / (1 + y/12), where y is the
-discount rate and 12 represents monthly compounding
-\item Analytical Convexity = Σ(PV_t × t × (t + 1/12)) / (PV × (1 + y/12)^2),
-where t is in years and the formula reflects monthly compounding
+\item Modified Duration = Σ(PV_t × t / (1 + y_t/12)) / Σ(PV_t)
+\item Analytical Convexity = Σ(PV_t × t × (t + 1/12) / (1 + y_t/12)^2) / Σ(PV_t),
+where t is in years and y_t is the annual discount rate for that cash flow
 }
 
-When discount_rate is NULL, the function uses a weighted average of loan rates
-for the modified duration calculation.
+These sensitivities describe a parallel shift of all discount rates with
+cash flows held fixed. For a common rate y, modified duration reduces to
+Macaulay duration / (1 + y/12). This is not effective duration: rate-dependent
+prepayments are not recomputed.
 }
 \examples{
 \dontrun{
