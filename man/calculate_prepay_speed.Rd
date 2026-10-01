@@ -48,7 +48,7 @@ Ignored if \code{col_interest_basis} is specified (default: 365)}
 \item{\code{allow_negative_prepay}}{Logical indicating whether to allow negative
 SMM/CPR values. If FALSE, negative values are floored at 0 (default: FALSE)}
 \item{\code{min_begin_balance}}{Numeric threshold for minimum beginning balance.
-Cohorts with beginning balance below this value are excluded from results (default: 0)}
+Diagnostic-free cohorts below this value are excluded; flagged rows are retained (default: 0)}
 }}
 
 \item{verbose}{Logical indicating whether to print informational messages
@@ -62,10 +62,17 @@ Data frame with columns:
 \item{\code{END_BAL}}{Ending loan balance for the period}
 \item{\code{SCHED_PRIN_TOTAL}}{Total scheduled principal for the period}
 \item{\code{FUNDED_BAL}}{Loans funded during the period (new originations, approximate)}
-\item{\code{ACTUAL_PRIN}}{Actual principal paid (including prepayments)}
+\item{\code{ACTUAL_PRIN}}{Principal inferred from snapshots; NA when attribution is unresolved}
 \item{\code{PREPAYMENT}}{Principal paid in excess of scheduled amount}
-\item{\code{SMM}}{Single monthly mortality (0 to 1 scale)}
-\item{\code{CPR}}{Conditional prepayment rate, annualized from SMM (0 to 1 scale)}
+\item{\code{SMM}}{Bounded SMM used for CPR: \verb{[0, 1]}, or \verb{[-1, 1]} when negative prepayment is allowed}
+\item{\code{CPR}}{1 - (1 - SMM)^12; may be negative when allowed; NA for undefined estimates}
+\item{\code{AVAILABLE_TO_PREPAY}}{Beginning balance minus scheduled principal, before any bounding}
+\item{\code{SMM_RAW}}{Unbounded prepayment estimate; NA for unresolved attribution or a non-positive denominator}
+\item{\code{SMM_ADJUSTED}}{Whether SMM differs from SMM_RAW; NA when undefined}
+\item{\code{COHORT_DISAPPEARED}}{Cohort present in the prior snapshot but absent in the current one}
+\item{\code{UNRESOLVED_EXITS}}{Count of prior cohort loans absent from the current cohort; NA without loan IDs}
+\item{\code{UNRESOLVED_ENTRIES}}{Count of cohort entrants not originated in the reporting month; NA without loan IDs}
+\item{\code{DIAGNOSTIC}}{Semicolon-separated flags, or "ok" when no issue was detected}
 }
 }
 \description{
@@ -75,12 +82,35 @@ Supports flexible column naming, loan-level or global interest rate calculation 
 for different financial institution systems.
 }
 \details{
+\strong{Snapshot safeguards:}
+
+Reporting dates must cover consecutive calendar months with one date per month.
+Missing whole-portfolio months raise an error. Cohorts are compared only with
+the immediately preceding snapshot. Disappeared cohorts remain in the output
+with unknown END_BAL and speeds, rather than being assumed paid off. A new or
+reappearing cohort has unknown BEGIN_BAL and speeds for that observation.
+
+With loan IDs, changes in cohort membership are flagged. Exits may represent
+payoffs, charge-offs, sales, transfers, or missing records. Entries other than
+same-month originations are also unresolved. These rows have NA ACTUAL_PRIN,
+PREPAYMENT, SMM_RAW, SMM, and CPR. Same-month originations retain the existing
+approximate funding treatment. Without IDs, individual exits and transfers
+cannot be detected; "ok" is not proof that all runoff was voluntary prepayment.
+No disappearance after the final supplied snapshot can be detected.
+
+DIAGNOSTIC flags are cohort_disappeared, no_prior_cohort, unresolved_exits,
+unresolved_entries, invalid_denominator, nonfinite_estimate,
+negative_prepayment, and out_of_range_smm. Undefined estimates produce one
+summary warning, even when verbose = FALSE. Negative and bounded estimates
+retain flags in the output. Diagnostic rows bypass min_begin_balance filtering.
+
 \strong{Methodology:}
 
-SMM measures the monthly prepayment rate relative to the pool available to prepay
+SMM_RAW measures the monthly prepayment rate relative to the pool available to prepay
 (beginning balance minus scheduled principal):
 \deqn{SMM = \frac{PREPAYMENT}{BEGIN\_BAL - SCHED\_PRIN\_TOTAL}}{SMM = PREPAYMENT / (BEGIN_BAL - SCHED_PRIN_TOTAL)}
 
+This ratio is retained as SMM_RAW; SMM is its bounded value.
 CPR annualizes SMM using the standard conversion formula:
 \deqn{CPR = 1 - (1 - SMM)^{12}}{CPR = 1 - (1 - SMM)^12}
 
@@ -120,7 +150,7 @@ for each effective date. Use \code{col_loanid} parameter to validate this assump
 \item Loan-level data with monthly snapshots (one row per loan per reporting date)
 \item Data should include only active loans (open and non-performing)
 \item All required columns must be present (checked on function entry)
-\item Balances and payments should be positive numeric values
+\item Balances, original balances, payments, and rates must be finite, non-missing, non-negative numeric values
 \item Interest rates should be in decimal form (e.g., 0.0729 for 7.29\\%). Percentage
 format (e.g., 7.29) will be detected and converted with a warning.
 \item Date columns must be coercible to Date format
@@ -151,8 +181,8 @@ if available.
 \itemize{
 \item The first month of data is excluded automatically (no prior month for lagging)
 \item By default, SMM and CPR are floored at 0 (set \code{allow_negative_prepay = TRUE} to disable)
-\item NA values in balance or payment columns are removed with \code{na.rm = TRUE}
-\item Cohorts with beginning balance below \code{min_begin_balance} are filtered out
+\item Missing or non-finite required numeric data raises an error; it is not treated as zero
+\item Only diagnostic-free cohorts below \code{min_begin_balance} are filtered out
 \item The function uses \code{lubridate} for date handling and \code{dplyr} for data manipulation
 \item Providing \code{col_loanid} improves both data quality and calculation accuracy
 }

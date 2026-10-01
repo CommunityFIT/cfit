@@ -1,5 +1,32 @@
 # cfit (development version)
 
+## Reliable core: historical prepayment safeguards
+
+* `calculate_prepay_speed()` requires consecutive calendar months with exactly
+  one reporting date per month. It no longer lags across missing portfolio
+  months or reuses stale observations for reappearing cohorts.
+* Disappearing cohorts remain in the output with unknown ending balances.
+  New/reappearing cohorts have unknown beginning balances. With loan IDs,
+  cohort exits and entrants other than same-month originations are flagged;
+  this includes transfers. Principal attribution and speeds are `NA` for these
+  unresolved rows. No exit is automatically assumed to be voluntary prepayment.
+* Added `AVAILABLE_TO_PREPAY`, `SMM_RAW`, `SMM_ADJUSTED`,
+  `COHORT_DISAPPEARED`, `UNRESOLVED_EXITS`, `UNRESOLVED_ENTRIES`, and
+  `DIAGNOSTIC`. Counts are `NA` when no loan ID is supplied. `SMM` is now exactly
+  the bounded rate used for CPR, with raw values retained separately. Negative
+  estimates carry a flag even when `allow_negative_prepay = TRUE`.
+* Non-positive denominators or non-finite estimates yield `NA` speeds instead
+  of `Inf`/`NaN`. Undefined estimates produce a summary warning independently
+  of `verbose`. Diagnostic rows bypass `min_begin_balance` filtering.
+* Required numeric snapshot fields must be finite, non-missing and non-negative;
+  missing values are no longer silently summed as zero. Loan IDs, when supplied,
+  must be non-missing and non-empty. Grouping names cannot collide with output
+  metrics or diagnostics.
+* README examples now supply loan IDs, demonstrate unresolved exits and raw
+  versus bounded SMM, and isolate the intentional duplicate-ID example.
+  Normal complete monthly estimates retain their calculations. Snapshot-based
+  funding remains approximate; transaction-level attribution is deferred.
+
 ## Reliable core: portfolio analytics
 
 * `calculate_duration()` and `calculate_wal()` now validate month sequences
