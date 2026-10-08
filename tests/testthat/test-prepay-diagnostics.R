@@ -106,12 +106,13 @@ test_that("raw and bounded SMM are distinct and CPR always uses reported SMM", {
     expect_match(out$DIAGNOSTIC, "out_of_range_smm")
     expect_equal(out$CPR, 1 - (1-out$SMM)^12)
   }
-  # Funding approximation can produce a raw estimate greater than one.
+  # Funding at the reported balance cannot push the raw estimate above one, even
+  # when ORIGBAL (here 2000) exceeds the balance actually reported (900).
   x$BAL[2] <- 900; x$ORIGDATE[2] <- as.Date("2024-02-01"); x$ORIGBAL[2] <- 2000
   out <- prepay_estimate(x, ids = FALSE)
-  expect_gt(out$SMM_RAW, 1)
-  expect_equal(out$SMM, 1); expect_equal(out$CPR, 1)
-  expect_true(out$SMM_ADJUSTED)
+  expect_equal(out$FUNDED_BAL, 900)
+  expect_equal(out$SMM_RAW, 1)
+  expect_false(out$SMM_ADJUSTED)
 })
 
 test_that("diagnostics survive filters, custom names, missing cohort labels and empty results", {
@@ -162,9 +163,12 @@ test_that("portfolio exits are payoffs by default and unresolved in strict mode"
   expect_equal(out$PAYOFF_EXITS, c(0L, 1L))
   expect_equal(out$UNRESOLVED_EXITS, c(0L, 0L))
   expect_equal(out$DIAGNOSTIC, c("ok", "ok"))
-  expect_equal(out$PREPAYMENT[2], 1800)
-  expect_equal(out$SMM[2], 1800 / 2600)
-  expect_equal(out$CPR[2], 1 - (1 - 1800 / 2600)^12)
+  # b's final scheduled payment (200) is scheduled principal, not prepayment.
+  expect_equal(out$EXIT_SCHED_PRIN, c(0, 200))
+  expect_equal(out$SCHED_PRIN_TOTAL[2], 100 + 200)
+  expect_equal(out$PREPAYMENT[2], 1800 - 200)
+  expect_equal(out$SMM[2], 1600 / 2400)
+  expect_equal(out$CPR[2], 1 - (1 - 1600 / 2400)^12)
   # Portfolio-only grouping, as used for whole-portfolio speeds.
   expect_no_warning(all <- calculate_prepay_speed(x, "EFFDATE",
     list(col_loanid = "ID", interest_basis = NA)))
@@ -182,6 +186,7 @@ test_that("listed non-prepayment exits are removed from runoff and the pool", {
     out <- prepay_estimate(x, exit_treatment = mode, non_prepay_exit_ids = "b")
     expect_equal(out$EXCLUDED_EXIT_BAL, c(0, 1800))
     expect_equal(out$PAYOFF_EXITS, c(0L, 0L))
+    expect_equal(out$EXIT_SCHED_PRIN, c(0, 0))
     expect_equal(out$ACTUAL_PRIN[2], 100)
     expect_equal(out$AVAILABLE_TO_PREPAY[2], 800)
     expect_equal(out$SMM[2], 0)
@@ -195,6 +200,7 @@ test_that("a cohort whose loans all paid off ends at zero balance", {
   b <- out[out$TYPECODE == "B", ]
   expect_true(b$COHORT_DISAPPEARED[2])
   expect_equal(b$END_BAL[2], 0)
+  expect_equal(b$SCHED_PRIN_TOTAL[2], 200)
   expect_equal(b$SMM[2], 1)
   expect_equal(b$DIAGNOSTIC[2], "ok")
   # Without loan IDs the disappearance remains unresolved.
@@ -202,19 +208,28 @@ test_that("a cohort whose loans all paid off ends at zero balance", {
   expect_match(out$DIAGNOSTIC[out$TYPECODE == "B"][2], "cohort_disappeared")
 })
 
-test_that("prior-month originations first reported now are funding, not entries", {
+test_that("new loans are funding at their first reported balance", {
   x <- prepay_history()[1:4, ]; x$TYPECODE <- "POOL"
   late <- x[3, ]; late$ID <- "late"; late$ORIGDATE <- as.Date("2024-01-31")
   late$BAL <- 500; late$ORIGBAL <- 500
   out <- prepay_estimate(rbind(x, late))
   expect_equal(out$FUNDED_BAL, 500)
   expect_equal(out$UNRESOLVED_ENTRIES, 0L)
+  expect_equal(out$LATE_FUNDED_ENTRIES, 0L)
   expect_equal(out$CPR, 0)
-  # An older loan appearing for the first time is still unresolved.
+  # A loan first reported long after origination is new balance by default...
   late$ORIGDATE <- as.Date("2023-11-15")
-  expect_warning(out <- prepay_estimate(rbind(x, late)), "undefined")
+  expect_no_warning(out <- prepay_estimate(rbind(x, late)))
+  expect_equal(out$FUNDED_BAL, 500)
+  expect_equal(out$LATE_FUNDED_ENTRIES, 1L)
+  expect_equal(out$UNRESOLVED_ENTRIES, 0L)
+  expect_equal(out$CPR, 0)
+  # ...and unresolved when entry_treatment = "unresolved".
+  expect_warning(out <- prepay_estimate(rbind(x, late), entry_treatment = "unresolved"), "undefined")
   expect_equal(out$UNRESOLVED_ENTRIES, 1L)
+  expect_equal(out$LATE_FUNDED_ENTRIES, 0L)
   expect_equal(out$FUNDED_BAL, 0)
+  expect_true(is.na(out$CPR))
 })
 
 test_that("exit controls are validated", {
@@ -224,4 +239,84 @@ test_that("exit controls are validated", {
   }
   expect_error(prepay_estimate(x, non_prepay_exit_ids = c("a", NA)), "non_prepay_exit_ids")
   expect_error(prepay_estimate(x, ids = FALSE, non_prepay_exit_ids = "a"), "requires 'col_loanid'")
+  for (bad in list("drop", NA_character_, c("funding", "unresolved"), 1)) {
+    expect_error(prepay_estimate(x, entry_treatment = bad), "entry_treatment")
+  }
+})
+
+test_that("a loan making its final scheduled payment is not a prepayment", {
+  d <- as.Date(c("2024-01-31", "2024-02-29"))
+  base <- data.frame(ID = c("A", "B", "A"), EFFDATE = d[c(1, 1, 2)],
+    ORIGDATE = as.Date("2020-01-15"), TYPECODE = "P", ORIGBAL = 15000, CURRINTRATE = 0)
+  # B's 300 balance is due in full with its 300 payment: a maturity, not a prepayment.
+  x <- cbind(base, BAL = c(10000, 300, 9700), PAYAMT = 300)
+  out <- calculate_prepay_speed(x, "EFFDATE", list(col_loanid = "ID", interest_basis = NA))
+  expect_equal(out$EXIT_SCHED_PRIN, 300)
+  expect_equal(out$PREPAYMENT, 0)
+  expect_equal(out$CPR, 0)
+  # The final payment is capped at the remaining balance.
+  x$PAYAMT[2] <- 450
+  out <- calculate_prepay_speed(x, "EFFDATE", list(col_loanid = "ID", interest_basis = NA))
+  expect_equal(out$EXIT_SCHED_PRIN, 300)
+  expect_equal(out$PREPAYMENT, 0)
+  # A voluntary payoff prepays its balance net of that month's scheduled principal.
+  x <- cbind(base, BAL = c(3e5, 3e5, 299000), PAYAMT = 1000)
+  out <- calculate_prepay_speed(x, "EFFDATE", list(col_loanid = "ID", interest_basis = NA))
+  expect_equal(out$PREPAYMENT, 299000)
+  expect_equal(out$SMM, 299000 / 598000)
+})
+
+test_that("payoff scheduled principal uses the exit month's interest accrual", {
+  d <- as.Date(c("2024-01-31", "2024-02-29"))
+  x <- data.frame(ID = c("A", "B", "A"), EFFDATE = d[c(1, 1, 2)],
+    ORIGDATE = as.Date("2020-01-15"), TYPECODE = "P", BAL = c(10000, 10000, 9600),
+    ORIGBAL = 15000, PAYAMT = 500, CURRINTRATE = 0.06, BASIS = c(365, 360, 365))
+  feb_interest <- 10000 * 0.06 * 29
+  out <- calculate_prepay_speed(x, "EFFDATE", list(col_loanid = "ID", interest_basis = 365))
+  expect_equal(out$EXIT_SCHED_PRIN, 500 - feb_interest / 365)
+  out <- calculate_prepay_speed(x, "EFFDATE", list(col_loanid = "ID", col_interest_basis = "BASIS"))
+  expect_equal(out$EXIT_SCHED_PRIN, 500 - feb_interest / 360)
+  out <- calculate_prepay_speed(x, "EFFDATE", list(col_loanid = "ID", interest_basis = NA))
+  expect_equal(out$EXIT_SCHED_PRIN, 500 - 10000 * 0.06 / 12)
+})
+
+test_that("amortization before a loan is first reported is not prepayment", {
+  d <- as.Date(c("2024-01-31", "2024-02-29"))
+  x <- data.frame(ID = c("A", "A", "L"), EFFDATE = d[c(1, 2, 2)],
+    ORIGDATE = as.Date(c("2020-01-15", "2020-01-15", "2024-01-20")), TYPECODE = "P",
+    BAL = c(10000, 9700, 19500), ORIGBAL = c(15000, 15000, 20000), PAYAMT = c(300, 300, 500),
+    CURRINTRATE = 0)
+  # L paid 500 of scheduled principal before its first snapshot.
+  out <- calculate_prepay_speed(x, "EFFDATE", list(col_loanid = "ID", interest_basis = NA))
+  expect_equal(out$FUNDED_BAL, 19500)
+  expect_equal(out$PREPAYMENT, 0)
+  # ORIGBAL recorded as a commitment larger than the drawn balance.
+  x$ORIGDATE[3] <- as.Date("2024-02-10"); x$ORIGBAL[3] <- 4e5; x$BAL[3] <- 250000
+  for (ids in list("ID", NULL)) {
+    out <- calculate_prepay_speed(x, "EFFDATE", list(col_loanid = ids, interest_basis = NA))
+    expect_equal(out$FUNDED_BAL, 250000)
+    expect_lte(out$SMM_RAW, 1)
+  }
+  out <- calculate_prepay_speed(x, "EFFDATE", list(col_loanid = "ID", interest_basis = NA))
+  expect_equal(out$PREPAYMENT, 0)
+})
+
+test_that("a continuing loan whose origination date resets is not new funding", {
+  # Modification or refinance under the same loan number: ORIGDATE moves to February.
+  x <- prepay_history()[1:4, ]; x$TYPECODE <- "POOL"
+  x$ORIGDATE[3] <- as.Date("2024-02-10")
+  out <- prepay_estimate(x)
+  expect_equal(out$FUNDED_BAL, 0)
+  expect_equal(out$CPR, 0)
+})
+
+test_that("remapped columns may coexist with columns carrying the default names", {
+  x <- prepay_history()
+  x$FUND_DATE <- x$ORIGDATE; x$FUND_BAL <- x$ORIGBAL
+  x$ORIGDATE <- as.Date("1999-01-01"); x$ORIGBAL <- 1
+  cfg <- list(col_loanid = "ID", interest_basis = NA,
+              col_origdate = "FUND_DATE", col_orig_balance = "FUND_BAL")
+  out <- calculate_prepay_speed(x, c("EFFDATE", "TYPECODE"), cfg)
+  expect_equal(out, prepay_estimate(prepay_history()))
+  expect_error(calculate_prepay_speed(x, c("EFFDATE", "ORIGDATE"), cfg), "share an internal name")
 })

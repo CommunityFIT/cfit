@@ -16,9 +16,23 @@ devtools::install_github("CommunityFIT/cfit")
 library(cfit)
 ```
 
-## Upgrading to v0.2.7
+## Upgrading to v0.2.8
 
-v0.2.7 restores prepayment speeds for loan-ID workflows. In v0.2.6, any loan
+v0.2.8 stops scheduled repayments from being counted as prepayments, so
+estimated speeds may be somewhat lower than v0.2.7, especially for portfolios
+with many maturities or late-reported originations:
+
+- A loan that pays off has its final-month scheduled principal deducted; a loan
+  reaching maturity is no longer a prepayment (`EXIT_SCHED_PRIN`).
+- New loans are funded at their first reported balance rather than `ORIGBAL`, so
+  amortization before the first report, or a commitment recorded as `ORIGBAL`,
+  is no longer prepayment. With loan IDs, any loan not seen in an earlier
+  snapshot is new funding (`entry_treatment = "funding"`), even when originated
+  well before it was first reported (`LATE_FUNDED_ENTRIES`).
+- `col_origdate` and `col_orig_balance` may now point at alternative columns
+  even when `ORIGDATE` and `ORIGBAL` columns are also present.
+
+v0.2.7 restored prepayment speeds for loan-ID workflows. In v0.2.6, any loan
 leaving the portfolio made that period's SMM/CPR `NA`, so portfolios with monthly
 payoffs returned no estimates. Exits are now counted as payoffs by default; list
 charge-offs and other non-prepayment exits in `non_prepay_exit_ids`, or set
@@ -100,7 +114,9 @@ prepay_results[c("EFFDATE", "TYPECODE", "SMM_RAW", "SMM", "CPR",
 not `Inf` or `NaN`. Undefined estimates produce a summary warning.
 
 With loan IDs, a loan that leaves the portfolio is counted as a payoff by
-default. This example removes loan 102 from February while keeping the AUTO cohort:
+default. Its final scheduled payment is counted as scheduled principal
+(`EXIT_SCHED_PRIN`) and the rest of its balance as prepayment. This example
+removes loan 102 from February while keeping the AUTO cohort:
 
 ```r
 incomplete_snapshots <- subset(
@@ -112,7 +128,7 @@ exit_results <- calculate_prepay_speed(
   prepay_config = list(col_loanid = "LOANNUMBER")
 )
 exit_results[c("EFFDATE", "TYPECODE", "PAYOFF_EXITS", "SMM", "CPR", "DIAGNOSTIC")]
-# February AUTO: PAYOFF_EXITS = 1, SMM = 0.409, CPR = 0.998, DIAGNOSTIC = "ok"
+# February AUTO: PAYOFF_EXITS = 1, SMM = 0.405, CPR = 0.998, DIAGNOSTIC = "ok"
 ```
 
 Not every exit is a prepayment. Pass the IDs of charged-off, sold, or otherwise
@@ -132,11 +148,16 @@ Set `exit_treatment = "unresolved"` to treat every unlisted exit as unknown, as
 v0.2.6 did: February AUTO then has `UNRESOLVED_EXITS = 1` and `CPR = NA`, with a
 summary warning.
 
-Some membership changes stay unresolved in either mode, with `NA` speeds: loans
-that move between cohorts, loans that leave and reappear in a later snapshot,
-and new loans originated before the prior month. Same-month originations, and
-prior-month originations first reported in the current snapshot, are counted in
-`FUNDED_BAL`. Flagged rows bypass `min_begin_balance` filtering.
+A loan reported for the first time is new funding at that first balance
+(`FUNDED_BAL`), whatever its origination date; `LATE_FUNDED_ENTRIES` counts those
+originated before the prior month, such as boarded or converted loans. Set
+`entry_treatment = "unresolved"` to treat those as unknown instead.
+
+Some membership changes stay unresolved in every mode, with `NA` speeds: loans
+that move between cohorts, and loans that leave and reappear in a later
+snapshot. Group by a characteristic that does not change over a loan's life
+(for example its type when first reported) to avoid transfers. Flagged rows
+bypass `min_begin_balance` filtering.
 
 A disappearing cohort remains in the output with `COHORT_DISAPPEARED = TRUE`.
 With IDs, if every loan in it left as a payoff or listed exit, it ends at a zero
@@ -386,7 +407,7 @@ See `?calculate_duration` and `?calculate_wal` for options.
 
 ## Roadmap
 
-Planned improvements after v0.2.7 include:
+Planned improvements after v0.2.8 include:
 
 - Balloon and interest-only loan schedules, including commercial loans
 - A configurable month-end payment-date convention

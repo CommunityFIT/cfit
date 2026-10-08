@@ -21,7 +21,8 @@
 #'     \item{\code{col_origdate}}{Name of origination date column (default: "ORIGDATE")}
 #'     \item{\code{col_typecode}}{Name of loan type/product column (default: "TYPECODE")}
 #'     \item{\code{col_balance}}{Name of current loan balance column (default: "BAL")}
-#'     \item{\code{col_orig_balance}}{Name of original/funded balance column (default: "ORIGBAL")}
+#'     \item{\code{col_orig_balance}}{Name of original/funded balance column (default: "ORIGBAL").
+#'       Validated but not used for funding, which is measured at the reported balance.}
 #'     \item{\code{col_payment}}{Name of contractual payment amount column (default: "PAYAMT")}
 #'     \item{\code{col_rate}}{Name of current interest rate column (default: "CURRINTRATE").
 #'       Rates should be in decimal form (e.g., 0.0729 for 7.29\%). The function will
@@ -47,7 +48,16 @@
 #'       prepayments (e.g., charge-offs, sales, transfers out of the data). Their prior
 #'       balance is removed from both runoff and the pool available to prepay.
 #'       Requires \code{col_loanid} (default: NULL)}
+#'     \item{\code{entry_treatment}}{How loans reported for the first time are treated when
+#'       \code{col_loanid} is supplied. \code{"funding"} (default) counts every loan never
+#'       seen in an earlier snapshot as new balance, at its first reported balance, whatever
+#'       its origination date. \code{"unresolved"} withholds the estimate when a new loan
+#'       was originated before the prior month, as in v0.2.7.}
 #'   }
+#'
+#'   A config entry may point at a differently named column even when a column with
+#'   the default name is also present (e.g. \code{col_origdate = "FUND_DATE"} beside an
+#'   \code{ORIGDATE} column); the unmapped column is ignored.
 #'
 #' @param verbose Logical indicating whether to print informational messages
 #'   about interest calculation methods and data filtering (default: FALSE)
@@ -57,9 +67,11 @@
 #'     \item{Grouping columns}{As specified in \code{group_vars}}
 #'     \item{\code{BEGIN_BAL}}{Beginning loan balance for the period}
 #'     \item{\code{END_BAL}}{Ending loan balance for the period}
-#'     \item{\code{SCHED_PRIN_TOTAL}}{Total scheduled principal for the period}
-#'     \item{\code{FUNDED_BAL}}{Loans funded during the period (new originations, approximate).
-#'       With loan IDs, includes prior-month originations first reported in this snapshot}
+#'     \item{\code{SCHED_PRIN_TOTAL}}{Total scheduled principal for the period, including
+#'       EXIT_SCHED_PRIN for loans that paid off}
+#'     \item{\code{FUNDED_BAL}}{New balance entering the cohort, at the balance first reported.
+#'       With loan IDs: every loan not seen in an earlier snapshot (see \code{entry_treatment}).
+#'       Without loan IDs: loans originated in the reporting month}
 #'     \item{\code{ACTUAL_PRIN}}{Principal inferred from snapshots; NA when attribution is unresolved}
 #'     \item{\code{PREPAYMENT}}{Principal paid in excess of scheduled amount}
 #'     \item{\code{SMM}}{Bounded SMM used for CPR: `[0, 1]`, or `[-1, 1]` when negative prepayment is allowed}
@@ -73,9 +85,14 @@
 #'       could not be treated as payoffs (cohort transfers, loans that reappear later, or every
 #'       exit when \code{exit_treatment = "unresolved"}); NA without loan IDs}
 #'     \item{\code{PAYOFF_EXITS}}{Count of loans that left the portfolio and are counted as payoffs; NA without loan IDs}
+#'     \item{\code{EXIT_SCHED_PRIN}}{Final-month scheduled principal of payoff exits, capped at each
+#'       loan's prior balance; included in SCHED_PRIN_TOTAL. 0 without loan IDs}
 #'     \item{\code{EXCLUDED_EXIT_BAL}}{Prior balance of exits listed in \code{non_prepay_exit_ids}}
-#'     \item{\code{UNRESOLVED_ENTRIES}}{Count of cohort entrants not originated in the reporting or
-#'       prior month, including transfers in; NA without loan IDs}
+#'     \item{\code{UNRESOLVED_ENTRIES}}{Count of cohort entrants that are not new loans: transfers
+#'       in and loans returning after a gap (plus, with \code{entry_treatment = "unresolved"}, new
+#'       loans originated before the prior month); NA without loan IDs}
+#'     \item{\code{LATE_FUNDED_ENTRIES}}{Count of new loans counted as funding although originated
+#'       before the prior month (e.g. boarded, purchased, or converted loans); NA without loan IDs}
 #'     \item{\code{DIAGNOSTIC}}{Semicolon-separated flags, or "ok" when no issue was detected}
 #'   }
 #'
@@ -95,12 +112,17 @@
 #' (PAYOFF_EXITS) under the default \code{exit_treatment = "payoff"}. List
 #' charge-offs, sales, and other non-prepayment exits in
 #' \code{non_prepay_exit_ids} to remove their balance from runoff and from the pool.
-#' A cohort whose loans all left this way ends at a zero balance. Cohort
-#' transfers, loans that later reappear, and entrants originated before the prior
-#' month are unresolved: those rows have NA ACTUAL_PRIN, PREPAYMENT, SMM_RAW, SMM,
-#' and CPR. Same-month originations, and prior-month originations first reported
-#' in this snapshot, are counted as funding. Set \code{exit_treatment =
-#' "unresolved"} to treat every unlisted exit as unresolved. Without IDs,
+#' A payoff's final-month scheduled payment (payment less interest on its prior
+#' balance, capped at that balance) is scheduled principal, so a loan reaching
+#' maturity is not a prepayment. A cohort whose loans all left this way ends at
+#' a zero balance. A loan never reported before is new funding at its first
+#' reported balance, so amortization before it was first reported, or an ORIGBAL
+#' recorded as a commitment, is not counted as prepayment. Cohort transfers and
+#' loans that leave and later reappear are unresolved: those rows have NA
+#' ACTUAL_PRIN, PREPAYMENT, SMM_RAW, SMM, and CPR. Set \code{exit_treatment =
+#' "unresolved"} to treat every unlisted exit as unresolved, and
+#' \code{entry_treatment = "unresolved"} to treat new loans originated before the
+#' prior month as unresolved. Without IDs,
 #' individual exits and transfers cannot be detected; "ok" is not proof that all
 #' runoff was voluntary prepayment.
 #'
@@ -165,11 +187,14 @@
 #'
 #' \strong{FUNDED_BAL Interpretation:}
 #'
-#' FUNDED_BAL is an approximation of new loan originations, calculated by identifying
-#' loans where the origination date (month and year) matches the reporting period. It uses
-#' the original funded amount (ORIGBAL) rather than actual cash flows, and matches by
-#' month/year only. For precise cash flow analysis, consider using actual funding data
-#' if available.
+#' FUNDED_BAL is the balance of new loans when first reported, which keeps the
+#' principal-flow identity exact: a new loan adds the same amount to END_BAL and
+#' FUNDED_BAL, so it contributes no principal or prepayment in its first month. With
+#' loan IDs, a loan is new when its ID is absent from every earlier snapshot; a
+#' continuing loan whose origination date is reset (e.g. a modification) is not new.
+#' Without loan IDs, new loans are those whose origination month matches the
+#' reporting month. ORIGBAL is not used, since it can differ from the amount on the
+#' books (e.g. a commitment, or a loan that amortized before it was first reported).
 #'
 #' \strong{Data Quality Safeguards:}
 #' \itemize{
@@ -251,7 +276,8 @@ calculate_prepay_speed <- function(
       allow_negative_prepay = FALSE,
       min_begin_balance = 0,
       exit_treatment = "payoff",
-      non_prepay_exit_ids = NULL
+      non_prepay_exit_ids = NULL,
+      entry_treatment = "funding"
     ),
     verbose = FALSE
 ) {
@@ -289,7 +315,8 @@ calculate_prepay_speed <- function(
     allow_negative_prepay = FALSE,
     min_begin_balance = 0,
     exit_treatment = "payoff",
-    non_prepay_exit_ids = NULL
+    non_prepay_exit_ids = NULL,
+    entry_treatment = "funding"
   )
 
   # Merge user config with defaults (user values take precedence)
@@ -310,6 +337,7 @@ calculate_prepay_speed <- function(
   min_begin_balance <- prepay_config$min_begin_balance
   exit_treatment <- prepay_config$exit_treatment
   non_prepay_exit_ids <- prepay_config$non_prepay_exit_ids
+  entry_treatment <- prepay_config$entry_treatment
 
   # Validate required columns exist (excluding optional col_interest_basis and col_loanid)
   required_cols <- c(
@@ -382,7 +410,8 @@ calculate_prepay_speed <- function(
   reserved_output <- c("BEGIN_BAL", "END_BAL", "SCHED_PRIN_TOTAL", "FUNDED_BAL",
     "ACTUAL_PRIN", "PREPAYMENT", "SMM", "CPR", "AVAILABLE_TO_PREPAY", "SMM_RAW",
     "SMM_ADJUSTED", "COHORT_DISAPPEARED", "UNRESOLVED_EXITS", "PAYOFF_EXITS",
-    "EXCLUDED_EXIT_BAL", "UNRESOLVED_ENTRIES", "DIAGNOSTIC")
+    "EXIT_SCHED_PRIN", "EXCLUDED_EXIT_BAL", "UNRESOLVED_ENTRIES", "LATE_FUNDED_ENTRIES",
+    "DIAGNOSTIC")
   if (any(group_vars %in% reserved_output)) {
     stop("Grouping columns conflict with reserved prepayment output names; rename them first.")
   }
@@ -410,6 +439,11 @@ calculate_prepay_speed <- function(
   if (!is.character(exit_treatment) || length(exit_treatment) != 1L ||
       is.na(exit_treatment) || !exit_treatment %in% c("payoff", "unresolved")) {
     stop("'exit_treatment' must be \"payoff\" or \"unresolved\"")
+  }
+
+  if (!is.character(entry_treatment) || length(entry_treatment) != 1L ||
+      is.na(entry_treatment) || !entry_treatment %in% c("funding", "unresolved")) {
+    stop("'entry_treatment' must be \"funding\" or \"unresolved\"")
   }
 
   if (!is.null(non_prepay_exit_ids)) {
@@ -444,6 +478,21 @@ calculate_prepay_speed <- function(
   # Add loan ID column to rename list if provided
   if (use_loan_id) {
     rename_list$LOANID <- col_loanid
+  }
+
+  # An unmapped column may already carry an internal name, e.g. ORIGDATE when
+  # col_origdate = "FUND_DATE". Drop it so the mapped column can take that name.
+  shadowed <- setdiff(intersect(names(rename_list), names(df)), unlist(rename_list))
+  if (length(shadowed) > 0) {
+    if (any(group_vars %in% shadowed)) {
+      stop("Grouping column(s) ", paste(intersect(group_vars, shadowed), collapse = ", "),
+           " share an internal name with a remapped field; rename them first.")
+    }
+    if (verbose) {
+      message("Ignoring unmapped column(s) replaced by prepay_config mappings: ",
+              paste(shadowed, collapse = ", "))
+    }
+    df <- df[, setdiff(names(df), shadowed), drop = FALSE]
   }
 
   df <- df %>%
@@ -660,6 +709,21 @@ calculate_prepay_speed <- function(
         )
       )
 
+    # If the loan pays off before the next snapshot, its final scheduled payment
+    # (capped at the remaining balance) is scheduled principal, not prepayment.
+    next_date <- reporting_dates[match(df$EFFDATE, reporting_dates) + 1L]
+    basis <- if (use_loan_level_basis) {
+      df$INTEREST_BASIS
+    } else if (!is.null(interest_basis) && !is.na(interest_basis)) {
+      rep(interest_basis, nrow(df))
+    } else {
+      rep(NA_real_, nrow(df))
+    }
+    next_rate <- ifelse(basis %in% c(360, 365),
+                        df$CURRINTRATE * days_in_month(next_date) / basis,
+                        df$CURRINTRATE / 12)
+    df$EXIT_SCHEDPRIN <- pmin(df$BAL, pmax(0, df$PAYAMT - df$BAL * next_rate))
+
     if (verbose) {
       message("Using beginning-of-period balance for scheduled principal calculation (accurate method)")
     }
@@ -691,34 +755,18 @@ calculate_prepay_speed <- function(
   # ========================================================================
 
   balance_snapshot <- prepay_snapshot_pairs(df, group_vars, reporting_dates, use_loan_id,
-                                            exit_treatment, non_prepay_exit_ids)
-
-  # ========================================================================
-  # STEP 2: FUNDED BALANCE FROM NEW ORIGINATIONS
-  # ========================================================================
-
-  funded_summary <- df %>%
-    # Capture loans originated in the same month/year as reporting period
-    filter(
-      year(ORIGDATE) == year(EFFDATE) &
-        month(ORIGDATE) == month(EFFDATE)
-    ) %>%
-    group_by(!!!syms(group_vars)) %>%
-    summarise(
-      FUNDED_BAL = sum(ORIGBAL, na.rm = TRUE),
-      .groups = "drop"
-    )
+                                            exit_treatment, non_prepay_exit_ids,
+                                            entry_treatment)
 
   # ========================================================================
   # STEP 3: FINAL PREPAYMENT CALCULATION
   # ========================================================================
 
   df_summary <- balance_snapshot %>%
-    left_join(funded_summary, by = group_vars) %>%
     mutate(
-      # Loans not funded in this period get 0; with loan IDs, add prior-month
-      # originations first reported in this snapshot
-      FUNDED_BAL = coalesce(FUNDED_BAL, 0) + LATE_FUNDED_BAL,
+      # New balance entering the cohort, at the balance first reported (see
+      # prepay_snapshot_pairs), so it adds nothing to principal paid
+      FUNDED_BAL = NEW_FUNDED_BAL,
       # Principal flow: Beginning - Ending + New Money - non-prepayment exits
       ACTUAL_PRIN = BEGIN_BAL - END_BAL + FUNDED_BAL - EXCLUDED_EXIT_BAL,
       # Prepayment: Principal paid beyond scheduled amount
@@ -765,8 +813,10 @@ calculate_prepay_speed <- function(
       COHORT_DISAPPEARED,
       UNRESOLVED_EXITS,
       PAYOFF_EXITS,
+      EXIT_SCHED_PRIN,
       EXCLUDED_EXIT_BAL,
       UNRESOLVED_ENTRIES,
+      LATE_FUNDED_ENTRIES,
       DIAGNOSTIC
     ) %>%
     arrange(across(all_of(group_vars)))
