@@ -11,7 +11,7 @@ calculate_prepay_speed(
     "TYPECODE", col_balance = "BAL", col_orig_balance = "ORIGBAL", col_payment =
     "PAYAMT", col_rate = "CURRINTRATE", col_interest_basis = NULL, col_loanid = NULL,
     interest_basis = 365, allow_negative_prepay = FALSE, min_begin_balance = 0,
-    exit_treatment = "payoff", non_prepay_exit_ids = NULL),
+    exit_treatment = "payoff", non_prepay_exit_ids = NULL, entry_treatment = "funding"),
   verbose = FALSE
 )
 }
@@ -32,7 +32,8 @@ These typically represent reporting period and loan product type.
 \item{\code{col_origdate}}{Name of origination date column (default: "ORIGDATE")}
 \item{\code{col_typecode}}{Name of loan type/product column (default: "TYPECODE")}
 \item{\code{col_balance}}{Name of current loan balance column (default: "BAL")}
-\item{\code{col_orig_balance}}{Name of original/funded balance column (default: "ORIGBAL")}
+\item{\code{col_orig_balance}}{Name of original/funded balance column (default: "ORIGBAL").
+Validated but not used for funding, which is measured at the reported balance.}
 \item{\code{col_payment}}{Name of contractual payment amount column (default: "PAYAMT")}
 \item{\code{col_rate}}{Name of current interest rate column (default: "CURRINTRATE").
 Rates should be in decimal form (e.g., 0.0729 for 7.29\\%). The function will
@@ -58,7 +59,16 @@ withholds the estimate for any period with an exit, as in v0.2.6.}
 prepayments (e.g., charge-offs, sales, transfers out of the data). Their prior
 balance is removed from both runoff and the pool available to prepay.
 Requires \code{col_loanid} (default: NULL)}
-}}
+\item{\code{entry_treatment}}{How loans reported for the first time are treated when
+\code{col_loanid} is supplied. \code{"funding"} (default) counts every loan never
+seen in an earlier snapshot as new balance, at its first reported balance, whatever
+its origination date. \code{"unresolved"} withholds the estimate when a new loan
+was originated before the prior month, as in v0.2.7.}
+}
+
+A config entry may point at a differently named column even when a column with
+the default name is also present (e.g. \code{col_origdate = "FUND_DATE"} beside an
+\code{ORIGDATE} column); the unmapped column is ignored.}
 
 \item{verbose}{Logical indicating whether to print informational messages
 about interest calculation methods and data filtering (default: FALSE)}
@@ -69,9 +79,11 @@ Data frame with columns:
 \item{Grouping columns}{As specified in \code{group_vars}}
 \item{\code{BEGIN_BAL}}{Beginning loan balance for the period}
 \item{\code{END_BAL}}{Ending loan balance for the period}
-\item{\code{SCHED_PRIN_TOTAL}}{Total scheduled principal for the period}
-\item{\code{FUNDED_BAL}}{Loans funded during the period (new originations, approximate).
-With loan IDs, includes prior-month originations first reported in this snapshot}
+\item{\code{SCHED_PRIN_TOTAL}}{Total scheduled principal for the period, including
+EXIT_SCHED_PRIN for loans that paid off}
+\item{\code{FUNDED_BAL}}{New balance entering the cohort, at the balance first reported.
+With loan IDs: every loan not seen in an earlier snapshot (see \code{entry_treatment}).
+Without loan IDs: loans originated in the reporting month}
 \item{\code{ACTUAL_PRIN}}{Principal inferred from snapshots; NA when attribution is unresolved}
 \item{\code{PREPAYMENT}}{Principal paid in excess of scheduled amount}
 \item{\code{SMM}}{Bounded SMM used for CPR: \verb{[0, 1]}, or \verb{[-1, 1]} when negative prepayment is allowed}
@@ -85,9 +97,14 @@ EXCLUDED_EXIT_BAL, before any bounding}
 could not be treated as payoffs (cohort transfers, loans that reappear later, or every
 exit when \code{exit_treatment = "unresolved"}); NA without loan IDs}
 \item{\code{PAYOFF_EXITS}}{Count of loans that left the portfolio and are counted as payoffs; NA without loan IDs}
+\item{\code{EXIT_SCHED_PRIN}}{Final-month scheduled principal of payoff exits, capped at each
+loan's prior balance; included in SCHED_PRIN_TOTAL. 0 without loan IDs}
 \item{\code{EXCLUDED_EXIT_BAL}}{Prior balance of exits listed in \code{non_prepay_exit_ids}}
-\item{\code{UNRESOLVED_ENTRIES}}{Count of cohort entrants not originated in the reporting or
-prior month, including transfers in; NA without loan IDs}
+\item{\code{UNRESOLVED_ENTRIES}}{Count of cohort entrants that are not new loans: transfers
+in and loans returning after a gap (plus, with \code{entry_treatment = "unresolved"}, new
+loans originated before the prior month); NA without loan IDs}
+\item{\code{LATE_FUNDED_ENTRIES}}{Count of new loans counted as funding although originated
+before the prior month (e.g. boarded, purchased, or converted loans); NA without loan IDs}
 \item{\code{DIAGNOSTIC}}{Semicolon-separated flags, or "ok" when no issue was detected}
 }
 }
@@ -112,12 +129,17 @@ the portfolio and does not reappear in a later snapshot is counted as a payoff
 (PAYOFF_EXITS) under the default \code{exit_treatment = "payoff"}. List
 charge-offs, sales, and other non-prepayment exits in
 \code{non_prepay_exit_ids} to remove their balance from runoff and from the pool.
-A cohort whose loans all left this way ends at a zero balance. Cohort
-transfers, loans that later reappear, and entrants originated before the prior
-month are unresolved: those rows have NA ACTUAL_PRIN, PREPAYMENT, SMM_RAW, SMM,
-and CPR. Same-month originations, and prior-month originations first reported
-in this snapshot, are counted as funding. Set \code{exit_treatment =
-"unresolved"} to treat every unlisted exit as unresolved. Without IDs,
+A payoff's final-month scheduled payment (payment less interest on its prior
+balance, capped at that balance) is scheduled principal, so a loan reaching
+maturity is not a prepayment. A cohort whose loans all left this way ends at
+a zero balance. A loan never reported before is new funding at its first
+reported balance, so amortization before it was first reported, or an ORIGBAL
+recorded as a commitment, is not counted as prepayment. Cohort transfers and
+loans that leave and later reappear are unresolved: those rows have NA
+ACTUAL_PRIN, PREPAYMENT, SMM_RAW, SMM, and CPR. Set \code{exit_treatment =
+"unresolved"} to treat every unlisted exit as unresolved, and
+\code{entry_treatment = "unresolved"} to treat new loans originated before the
+prior month as unresolved. Without IDs,
 individual exits and transfers cannot be detected; "ok" is not proof that all
 runoff was voluntary prepayment.
 
@@ -182,11 +204,14 @@ format (e.g., 7.29) will be detected and converted with a warning.
 
 \strong{FUNDED_BAL Interpretation:}
 
-FUNDED_BAL is an approximation of new loan originations, calculated by identifying
-loans where the origination date (month and year) matches the reporting period. It uses
-the original funded amount (ORIGBAL) rather than actual cash flows, and matches by
-month/year only. For precise cash flow analysis, consider using actual funding data
-if available.
+FUNDED_BAL is the balance of new loans when first reported, which keeps the
+principal-flow identity exact: a new loan adds the same amount to END_BAL and
+FUNDED_BAL, so it contributes no principal or prepayment in its first month. With
+loan IDs, a loan is new when its ID is absent from every earlier snapshot; a
+continuing loan whose origination date is reset (e.g. a modification) is not new.
+Without loan IDs, new loans are those whose origination month matches the
+reporting month. ORIGBAL is not used, since it can differ from the amount on the
+books (e.g. a commitment, or a loan that amortized before it was first reported).
 
 \strong{Data Quality Safeguards:}
 \itemize{

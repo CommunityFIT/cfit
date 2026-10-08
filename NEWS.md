@@ -1,3 +1,32 @@
+# cfit 0.2.8
+
+## Historical prepayment: scheduled repayments are no longer prepayments
+
+Estimated speeds may be lower than v0.2.7. In a simulated amortizing portfolio
+with maturities and late-reported originations, v0.2.7 estimated a 19.10% CPR
+against a true 17.42%; v0.2.8 matches it.
+
+* With loan IDs, a payoff exit's final-month scheduled principal (payment less
+  interest on its prior balance, capped at that balance) is now included in
+  `SCHED_PRIN_TOTAL`. Previously only loans in the current snapshot contributed,
+  so a loan making its final scheduled payment counted entirely as prepayment.
+  New output column `EXIT_SCHED_PRIN`.
+* `FUNDED_BAL` is now the balance of new loans when first reported, not
+  `ORIGBAL`. Amortization before a loan's first report, or an `ORIGBAL` recorded
+  as a commitment above the drawn balance, no longer counts as prepayment. This
+  applies with and without loan IDs. `SMM_RAW` can no longer exceed 1.
+* With loan IDs, new loans are identified by ID rather than origination date. A
+  continuing loan whose origination date is reset (e.g. a modification) is no
+  longer counted as new funding.
+* New `prepay_config$entry_treatment`. The default, `"funding"`, counts every
+  loan not seen in an earlier snapshot as new funding, even when originated
+  before the prior month (counted in new column `LATE_FUNDED_ENTRIES`). Use
+  `"unresolved"` for the v0.2.7 behavior. Cohort transfers and loans returning
+  after a gap remain unresolved in either mode.
+* `col_origdate`, `col_orig_balance` and other mappings may point at a column
+  other than the default name even when a column with the default name is also
+  present; the unmapped column is ignored. Grouping by such a column errors.
+
 # cfit 0.2.7
 
 ## Historical prepayment: exits are payoffs by default
