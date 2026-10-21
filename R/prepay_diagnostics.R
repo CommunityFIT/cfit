@@ -19,11 +19,12 @@ validate_prepay_periods <- function(dates) {
 # unless listed in non_prepay_ids, and their final-month scheduled principal is
 # added to SCHED_PRIN_TOTAL; loans never seen before are funding at their first
 # reported balance (entry_treatment = "funding"); cohort transfers and loans that
-# leave and return stay unresolved. Without loan IDs, funding is the current
-# balance of same-month originations.
+# leave and return stay unresolved. With maturity dates, a payoff in or after its
+# maturity month is scheduled in full (e.g. a balloon), not prepaid. Without loan
+# IDs, funding is the current balance of same-month originations.
 prepay_snapshot_pairs <- function(df, groups, dates, use_loan_id,
                                   exit_treatment = "payoff", non_prepay_ids = NULL,
-                                  entry_treatment = "funding") {
+                                  entry_treatment = "funding", use_maturity = FALSE) {
   snapshot <- df %>%
     dplyr::group_by(dplyr::across(dplyr::all_of(groups))) %>%
     dplyr::summarise(END_BAL = sum(BAL), SCHED_PRIN_TOTAL = sum(SCHEDPRIN, na.rm = TRUE),
@@ -37,6 +38,7 @@ prepay_snapshot_pairs <- function(df, groups, dates, use_loan_id,
   out$UNRESOLVED_EXITS <- rep(NA_integer_, nrow(out))
   out$PAYOFF_EXITS <- rep(NA_integer_, nrow(out))
   out$EXIT_SCHED_PRIN <- rep(0, nrow(out))
+  out$MATURITY_EXIT_BAL <- rep(0, nrow(out))
   out$EXCLUDED_EXIT_BAL <- rep(0, nrow(out))
   out$UNRESOLVED_ENTRIES <- rep(NA_integer_, nrow(out))
   out$LATE_FUNDED_ENTRIES <- rep(NA_integer_, nrow(out))
@@ -64,6 +66,8 @@ prepay_snapshot_pairs <- function(df, groups, dates, use_loan_id,
   previous <- df[df$EFFDATE != utils::tail(dates, 1), keys, drop = FALSE]
   previous$.prior_bal <- df$BAL[df$EFFDATE != utils::tail(dates, 1)]
   previous$.exit_sched <- df$EXIT_SCHEDPRIN[df$EFFDATE != utils::tail(dates, 1)]
+  previous$.maturity <- if (use_maturity) df$MATDATE[df$EFFDATE != utils::tail(dates, 1)] else
+    rep(as.Date(NA), nrow(previous))
   previous$EFFDATE <- dates[match(previous$EFFDATE, dates) + 1L]
   exits <- dplyr::anti_join(previous, current_loans, by = keys)
   entries <- dplyr::anti_join(current_loans, previous, by = keys)
@@ -91,7 +95,11 @@ prepay_snapshot_pairs <- function(df, groups, dates, use_loan_id,
 
   exits$.unresolved <- exits$.type == "unresolved"
   exits$.payoff <- exits$.type == "payoff"
-  exits$.payoff_sched <- ifelse(exits$.type == "payoff", exits$.exit_sched, 0)
+  matured <- !is.na(exits$.maturity) &
+    lubridate::floor_date(exits$.maturity, "month") <= lubridate::floor_date(exits$EFFDATE, "month")
+  exits$.maturity_bal <- ifelse(exits$.type == "payoff" & matured, exits$.prior_bal, 0)
+  exits$.payoff_sched <- ifelse(exits$.type != "payoff", 0,
+                         ifelse(matured, exits$.prior_bal, exits$.exit_sched))
   exits$.excluded_bal <- ifelse(exits$.type == "excluded", exits$.prior_bal, 0)
   entries$.unresolved <- entries$.type == "unresolved"
   entries$.late <- entries$.type == "late_funded"
@@ -99,6 +107,7 @@ prepay_snapshot_pairs <- function(df, groups, dates, use_loan_id,
   out$UNRESOLVED_EXITS <- as.integer(cohort_total(exits, ".unresolved"))
   out$PAYOFF_EXITS <- as.integer(cohort_total(exits, ".payoff"))
   out$EXIT_SCHED_PRIN <- cohort_total(exits, ".payoff_sched")
+  out$MATURITY_EXIT_BAL <- cohort_total(exits, ".maturity_bal")
   out$EXCLUDED_EXIT_BAL <- cohort_total(exits, ".excluded_bal")
   out$UNRESOLVED_ENTRIES <- as.integer(cohort_total(entries, ".unresolved"))
   out$LATE_FUNDED_ENTRIES <- as.integer(cohort_total(entries, ".late"))

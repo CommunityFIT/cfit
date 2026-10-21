@@ -13,6 +13,7 @@ utils::globalVariables(c(
   "CURRINTRATE",
   "INTEREST_BASIS",
   "LOANID",                # Added for loan ID support
+  "MATDATE",               # Optional maturity date (v0.2.9)
   "DAYS_IN_MONTH",
   "MONTHLY_RATE",
   "BEGIN_BAL_LOAN",        # Added for loan-level beginning balance
