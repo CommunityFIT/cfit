@@ -2,7 +2,7 @@
 utils::globalVariables(c(
   "starting_balance", "adjusted_balance", "scheduled_payment",
   "gross_interest", "servicing_fee_amt", "reporting_fee_amt", "total_fees",
-  "scheduled_principal", "prepayment", "total_principal", "credit_loss",
+  "scheduled_principal", "balloon_principal", "prepayment", "total_principal", "credit_loss",
   "remaining_balance", "net_interest", "total_payment", "investor_principal",
   "investor_interest", "investor_total", "orig_fee", "net_interest_raw",
   "date", "."
@@ -13,12 +13,17 @@ utils::globalVariables(c(
 #' Generates monthly cash flow projections for a loan portfolio, incorporating
 #' user-defined prepayment speeds (CPR), credit costs, and various fee structures.
 #'
-#' @param data A non-empty data frame containing one snapshot row per loan.
+#' @param data Required. A non-empty data frame containing one snapshot row per
+#'   loan. It must contain the four required columns listed under
+#'   \strong{Required data columns} below; every other column is optional.
 #'   Required numeric fields must be finite and non-missing; balances must be
 #'   positive, rates non-negative, and terms positive integers. Dates must be
 #'   valid and non-missing. Invalid records raise an error rather than being skipped.
-#' @param config A named list of configuration parameters. Unknown, duplicate,
-#'   or unnamed entries raise an error. See details for structure.
+#' @param config Optional. A named list of configuration settings; every entry
+#'   has a default, so \code{list()} (the default) is valid when \code{data}
+#'   uses the default column names. Unknown, duplicate, or unnamed entries
+#'   raise an error. See \strong{Configuration} below for each entry and
+#'   whether it is required, optional, or conditionally required.
 #'
 #' @return Depending on return_monthly_totals setting:
 #'   \itemize{
@@ -26,11 +31,15 @@ utils::globalVariables(c(
 #'       LOAN_ID, eff_date, rate, tier, month, date (payment date; first payment
 #'       falls one month after eff_date, which is the t=0 valuation anchor), starting_balance, adjusted_balance, accrual_balance,
 #'       scheduled_payment, gross_interest, servicing_fee_amt, reporting_fee_amt,
-#'       total_fees, scheduled_principal, prepayment, total_principal, credit_loss,
+#'       total_fees, scheduled_principal, balloon_principal, prepayment,
+#'       total_principal, credit_loss,
 #'       remaining_balance, orig_fee, net_interest, total_payment, investor_principal,
 #'       investor_interest, investor_total
 #'       and original_tier (input classification as character; NA when col_tier
 #'       is not configured). Requested input grouping columns are also attached.
+#'       balloon_principal is the balloon collected at maturity (zero for
+#'       fully amortizing loans and in every other month); it is included in
+#'       scheduled_principal.
 #'     \item If TRUE: A list with two elements:
 #'       \itemize{
 #'         \item loan_cash_flows: Detailed loan-level cash flows (data frame)
@@ -39,6 +48,113 @@ utils::globalVariables(c(
 #'   }
 #'
 #' @details
+#' \strong{Configuration}
+#'
+#' Every \code{config} entry has a default. "Required" below means the
+#' \emph{data column} must exist; its name may be changed with the
+#' \code{col_*} entry. "Optional" entries may be omitted.
+#'
+#' \emph{Required data columns} (each must exist in \code{data}):
+#' \itemize{
+#'   \item col_balance: Current balance (default column: "balance")
+#'   \item col_rate: Current note rate as a decimal (default column: "current_interest_rate")
+#'   \item col_term: Remaining months to maturity, as of the snapshot
+#'     (default column: "months_to_maturity")
+#'   \item col_start_date: Snapshot/effective date, the t = 0 valuation
+#'     anchor (default column: "eff_date")
+#' }
+#'
+#' \emph{Optional data columns} (default NULL unless noted; when set, the column must exist):
+#' \itemize{
+#'   \item col_loanid: Loan identifier (default: "LOAN_ID"). If that implicit
+#'     column is absent, or col_loanid is NULL, sequential IDs are generated.
+#'     An explicitly supplied col_loanid must exist.
+#'   \item col_tier: Loan tier used to look up assumption vectors.
+#'   \item col_monthly_payment: Contractual monthly payment. NA values use the
+#'     calculated payment for that loan.
+#'   \item col_orig_balance: Original balance, used for the origination fee.
+#'     NA values use the current balance.
+#'   \item col_amort_months_remaining: Remaining amortization months as of the
+#'     snapshot (not the original amortization term). Payments are calculated
+#'     over this term; a value greater than col_term makes the loan a balloon
+#'     loan. Must be NA or a positive integer at least col_term; NA means
+#'     fully amortizing over col_term. To convert an original amortization
+#'     term, subtract the payments already made, usually
+#'     original term - months_to_maturity.
+#'   \item col_balloon: Per-loan balloon flag, logical or 0/1. TRUE collects
+#'     any balance remaining at maturity as a balloon. NA uses
+#'     balloon_at_maturity. Use it when the tape has payments but no
+#'     amortization term.
+#' }
+#'
+#' \emph{Optional settings} (defaults shown):
+#' \itemize{
+#'   \item servicing_fee: Annual servicing fee rate as decimal (default: 0.0025)
+#'   \item annual_reporting_fee: Annual reporting fee rate as decimal (default: 0.00)
+#'   \item investor_share: Investor share percentage (default: 1.0 for 100%)
+#'   \item origination_fee: Origination fee rate (default: 0.0000)
+#'   \item interest_on_starting_balance: Calculate interest on the starting
+#'     balance, before prepayments and credit losses are removed (default: TRUE).
+#'     TRUE reflects standard monthly-pay consumer loan servicing: borrowers owe
+#'     a full month of interest on the balance outstanding at the start of the
+#'     period, including balances that pay off during the month. Set FALSE to
+#'     accrue interest on the post-prepay/post-loss balance (non-standard,
+#'     conservative).
+#'   \item credit_loss_reduces_interest: Whether credit losses are also deducted
+#'     from interest cash flows (default: FALSE). FALSE applies losses through
+#'     principal balance reduction only. TRUE additionally deducts charge-offs
+#'     from interest, which double-counts the loss and is retained only for
+#'     backward compatibility.
+#'   \item de_minimis_balance: Positive residual balances below this threshold
+#'     are collected as additional scheduled principal (default: 1.00).
+#'     Set to 0 to disable this cleanup.
+#'   \item balloon_at_maturity: Collect any balance remaining at maturity as a
+#'     balloon for every loan without a col_balloon flag (default: FALSE).
+#'     Intended for pools that are entirely balloon loans; on amortizing pools
+#'     it would convert payment or term errors into balloons.
+#'   \item reamortize_survivors: Prepayment cash flow convention (default: TRUE).
+#'     TRUE treats SMM prepayments as full payoffs of a fraction of loans: the
+#'     surviving balance re-amortizes over the remaining amortization term each
+#'     month, so the
+#'     aggregate scheduled payment declines with the survival factor. This
+#'     matches market/Bloomberg pool conventions. When col_monthly_payment is
+#'     supplied, tape payments are scaled by the cumulative survival factor
+#'     instead. FALSE retains the legacy fixed-payment behavior, which treats
+#'     prepayments as curtailments (original dollar payment held constant),
+#'     accelerating scheduled principal and shortening effective life; retained
+#'     for backward compatibility only.
+#'   \item prepay_model: "tier_static" (default) or "linear_incentive"
+#'   \item cpr_vec: Named vector of CPR rates by tier (default: c("default" = 0.0));
+#'     used when prepay_model = "tier_static"
+#'   \item credit_cost_vec: Named vector of annual credit cost rates by tier (default: c("default" = 0.0))
+#'   \item pd_vec, lgd_vec: Optional named vectors of PD and LGD rates (default: NULL).
+#'     Must be supplied together; when supplied they override credit_cost_vec.
+#'   \item return_monthly_totals: Whether to return aggregated monthly totals (default: FALSE)
+#'   \item monthly_totals_group_vars: Optional character vector of column names to group monthly totals by,
+#'     in addition to date (default: NULL). Use "original_tier" for input
+#'     classification or "tier" for the resolved assumption tier. Missing or
+#'     ambiguous columns raise an error instead of being ignored.
+#'   \item show_progress: Show progress messages for large portfolios and the
+#'     balloon summary message (default: TRUE)
+#' }
+#'
+#' \emph{Conditionally required settings}:
+#' \itemize{
+#'   \item With prepay_model = "linear_incentive", all of the following are
+#'     required (default: NULL):
+#'     \itemize{
+#'       \item current_market_rate: Scalar market rate (decimal);
+#'         rate_incentive = coupon - current_market_rate, coupon = col_rate (gross)
+#'       \item base_cpr_vec: Tier-keyed intercept CPR
+#'       \item beta_vec: Tier-keyed CPR sensitivity per decimal of rate incentive
+#'       \item cpr_min_vec, cpr_max_vec: Tier-keyed clamp bounds on CPR
+#'     }
+#'   \item Without col_tier, the prepayment and credit-cost vectors must
+#'     contain a tier named "default".
+#' }
+#'
+#' \strong{Validation and conventions}
+#'
 #' Loan IDs must be unique and non-missing. If the implicit default LOAN_ID
 #' column is absent, or col_loanid is NULL, sequential IDs are generated.
 #' Every explicitly requested column must exist, including col_loanid.
@@ -66,86 +182,44 @@ utils::globalVariables(c(
 #' apply even when return_monthly_totals is FALSE. Metadata lookup requires one
 #' input record per loan and preserves all projected rows and their order.
 #'
-#' Optional payment and original-balance columns must be numeric. NA values
-#' request the calculated payment or current-balance fallback for that loan;
-#' other supplied values must be finite and positive. Scalar settings must have
-#' the documented numeric or logical type. Rates above 1 still warn without
-#' automatic conversion. Validation does not add support for balloon payments
-#' or negative amortization.
+#' Optional payment, original-balance, and amortization-term columns must be
+#' numeric. NA values request the calculated payment, current-balance, or
+#' fully amortizing fallback for that loan; other supplied values must be
+#' finite and positive. Scalar settings must have the documented numeric or
+#' logical type. Rates above 1 still warn without automatic conversion.
+#' Negative amortization is not supported.
 #'
 #' Supplied payments (after survivor scaling, if enabled) must cover each
 #' period's gross accrued interest under the selected accrual convention.
 #' Payments below interest raise an error identifying the loan and month;
 #' only floating-point roundoff is tolerated. Payments equal to interest are
-#' allowed, but may leave principal outstanding at maturity.
+#' allowed (interest-only); flag such loans as balloons to collect their
+#' principal at maturity.
 #'
 #' Small-balance cleanup is included in scheduled_principal, so total_principal
 #' equals scheduled_principal + prepayment. scheduled_payment remains the
 #' calculated or supplied payment before final payoff adjustments. Positive
 #' sub-cent balances are projected rather than silently discarded.
 #'
-#' A portfolio-level warning identifies loans with residual balances at maturity
-#' of at least max(0.01, de_minimis_balance), in either output mode. These balances
-#' remain in remaining_balance; no balloon payment is assumed. Downstream PV and
-#' WAL therefore describe only the projected collections, not full repayment.
+#' \strong{Balloon loans}
 #'
-#' Configuration list structure:
-#' \itemize{
-#'   \item col_loanid: Column name for loan identifier (default: "LOAN_ID")
-#'   \item col_balance: Column name for current balance (default: "balance")
-#'   \item col_rate: Column name for interest rate as decimal (default: "current_interest_rate")
-#'   \item col_term: Column name for months to maturity (default: "months_to_maturity")
-#'   \item col_start_date: Column name for effective date (default: "eff_date")
-#'   \item col_tier: Column name for loan tier (default: NULL, optional)
-#'   \item col_monthly_payment: Column name for monthly payment (default: NULL, optional)
-#'   \item col_orig_balance: Column name for original balance (default: NULL, optional)
-#'   \item servicing_fee: Annual servicing fee rate as decimal (default: 0.0025)
-#'   \item annual_reporting_fee: Annual reporting fee rate as decimal (default: 0.00)
-#'   \item investor_share: Investor share percentage (default: 1.0 for 100%)
-#'   \item origination_fee: Origination fee rate (default: 0.0000)
-#'   \item interest_on_starting_balance: Calculate interest on the starting
-#'     balance, before prepayments and credit losses are removed (default: TRUE).
-#'     TRUE reflects standard monthly-pay consumer loan servicing: borrowers owe
-#'     a full month of interest on the balance outstanding at the start of the
-#'     period, including balances that pay off during the month. Set FALSE to
-#'     accrue interest on the post-prepay/post-loss balance (non-standard,
-#'     conservative).
-#'   \item credit_loss_reduces_interest: Whether credit losses are also deducted
-#'     from interest cash flows (default: FALSE). FALSE applies losses through
-#'     principal balance reduction only. TRUE additionally deducts charge-offs
-#'     from interest, which double-counts the loss and is retained only for
-#'     backward compatibility.
-#'   \item de_minimis_balance: Positive residual balances below this threshold
-#'     are collected as additional scheduled principal (default: 1.00).
-#'     Set to 0 to disable this cleanup.
-#'   \item reamortize_survivors: Prepayment cash flow convention (default: TRUE).
-#'     TRUE treats SMM prepayments as full payoffs of a fraction of loans: the
-#'     surviving balance re-amortizes over the remaining term each month, so the
-#'     aggregate scheduled payment declines with the survival factor. This
-#'     matches market/Bloomberg pool conventions. When col_monthly_payment is
-#'     supplied, tape payments are scaled by the cumulative survival factor
-#'     instead. FALSE retains the legacy fixed-payment behavior, which treats
-#'     prepayments as curtailments (original dollar payment held constant),
-#'     accelerating scheduled principal and shortening effective life; retained
-#'     for backward compatibility only.
-#'   \item cpr_vec: Named vector of CPR rates by tier (default: c("default" = 0.0))
-#'   \item credit_cost_vec: Named vector of annual credit cost rates by tier (default: c("default" = 0.0))
-#'   \item pd_vec: Optional named vector of PD rates (overrides credit_cost_vec if provided)
-#'   \item lgd_vec: Optional named vector of LGD rates (overrides credit_cost_vec if provided)
-#'   \item return_monthly_totals: Whether to return aggregated monthly totals (default: FALSE)
-#'   \item monthly_totals_group_vars: Optional character vector of column names to group monthly totals by,
-#'     in addition to date (default: NULL). Use "original_tier" for input
-#'     classification or "tier" for the resolved assumption tier. Missing or
-#'     ambiguous columns raise an error instead of being ignored.
-#'   \item show_progress: Show progress messages for large portfolios (default: TRUE)
-#'   \item prepay_model: "tier_static" (default) or "linear_incentive"
-#'   \item current_market_rate: Scalar market rate (decimal) for linear_incentive;
-#'     rate_incentive = coupon - current_market_rate, coupon = col_rate (gross)
-#'   \item base_cpr_vec: Tier-keyed intercept CPR (linear_incentive)
-#'   \item beta_vec: Tier-keyed CPR sensitivity per decimal of rate incentive (linear_incentive)
-#'   \item cpr_min_vec, cpr_max_vec: Tier-keyed clamp bounds on CPR (linear_incentive)
+#' A loan is a balloon loan when col_amort_months_remaining exceeds col_term,
+#' when its col_balloon flag is TRUE, or when its flag is NA (or col_balloon is
+#' not set) and balloon_at_maturity is TRUE. An explicit col_balloon = FALSE
+#' cannot override a longer amortization term; those loans pay a balloon and
+#' are reported in a warning. In the maturity month, the balance remaining
+#' after the regular payment and credit loss is collected as balloon_principal,
+#' which is part of scheduled_principal; no prepayment is projected in that
+#' month. A supplied payment that retires the loan before maturity leaves no
+#' balloon. When show_progress is TRUE, a message reports the number of loans
+#' paying a balloon and the total amount. Refinance or extension risk at
+#' maturity is not modeled: the balloon is assumed paid in full.
 #'
-#' }
+#' A portfolio-level warning identifies loans that are not balloon loans and
+#' retain residual balances at maturity of at least max(0.01, de_minimis_balance),
+#' in either output mode. These balances remain in remaining_balance. Downstream
+#' PV and WAL therefore describe only the projected collections, not full
+#' repayment.
 #'
 #' @importFrom dplyr bind_rows group_by summarise mutate if_else select left_join distinct across all_of arrange
 #' @importFrom purrr pmap
@@ -184,6 +258,22 @@ utils::globalVariables(c(
 #'
 #' results <- calculate_cash_flows(loan_data, config_totals)
 #'
+#' # Balloon (e.g. CRE) loans: 5 years to maturity on a 25-year schedule,
+#' # 3 years seasoned, so 264 amortization months remain
+#' cre_data <- data.frame(
+#'   LOAN_ID = c("CRE1", "AUTO1"),
+#'   balance = c(1500000, 25000),
+#'   current_interest_rate = c(0.0675, 0.0599),
+#'   months_to_maturity = c(24, 60),
+#'   amort_months_remaining = c(264, NA),   # NA: fully amortizing
+#'   eff_date = as.Date("2025-01-01")
+#' )
+#' cre_flows <- calculate_cash_flows(cre_data, list(
+#'   col_amort_months_remaining = "amort_months_remaining",
+#'   cpr_vec = c("default" = 0.05)
+#' ))
+#' subset(cre_flows, balloon_principal > 0)
+#'
 #' # Calculate portfolio yield
 #' library(FinCal)
 #' pool_cfs <- data.frame(
@@ -215,6 +305,8 @@ calculate_cash_flows <- function(data, config = list()) {
     col_tier = NULL,
     col_monthly_payment = NULL,
     col_orig_balance = NULL,
+    col_amort_months_remaining = NULL,
+    col_balloon = NULL,
 
     # Parameter defaults
     servicing_fee = 0.0025,
@@ -224,6 +316,7 @@ calculate_cash_flows <- function(data, config = list()) {
     interest_on_starting_balance = TRUE,
     credit_loss_reduces_interest = FALSE,
     de_minimis_balance = 1.00,
+    balloon_at_maturity = FALSE,
 
     # Prepayment cash flow convention
     reamortize_survivors = TRUE,
@@ -262,7 +355,8 @@ calculate_cash_flows <- function(data, config = list()) {
   if (length(missing_cols) > 0) {
     stop("Missing required columns in data: ", paste(missing_cols, collapse = ", "))
   }
-  optional_mappings <- c("col_tier", "col_monthly_payment", "col_orig_balance")
+  optional_mappings <- c("col_tier", "col_monthly_payment", "col_orig_balance",
+                         "col_amort_months_remaining", "col_balloon")
   # An explicitly requested identifier must exist. Automatic IDs remain available
   # when col_loanid is NULL or the implicit LOAN_ID column is absent.
   if ("col_loanid" %in% names(config)) {
@@ -322,6 +416,7 @@ calculate_cash_flows <- function(data, config = list()) {
     tiers[unknown] <- default_tier
   }
   cpr_per_loan <- resolve_prepay_cpr(data, cfg, default_tier)
+  balloon_terms <- resolve_balloon_terms(data, cfg)
 
   # Show progress for large portfolios
   if (cfg$show_progress && nrow(data) > 1000) {
@@ -339,7 +434,9 @@ calculate_cash_flows <- function(data, config = list()) {
       tier = tiers,
       cpr = cpr_per_loan,
       monthly_payment_val = if (!is.null(cfg$col_monthly_payment)) data[[cfg$col_monthly_payment]] else NA_real_,
-      origbalance = if (!is.null(cfg$col_orig_balance)) data[[cfg$col_orig_balance]] else NA_real_
+      origbalance = if (!is.null(cfg$col_orig_balance)) data[[cfg$col_orig_balance]] else NA_real_,
+      amort_months = balloon_terms$amort_months,
+      balloon = balloon_terms$balloon
     ),
     .f = generate_single_loan_cash_flow,
     cfg = cfg,
@@ -350,7 +447,7 @@ calculate_cash_flows <- function(data, config = list()) {
   loan_cash_flows <- dplyr::bind_rows(cash_flows_list)
 
   # Report incomplete maturity projections once per portfolio, in either output
-  # mode. Residual principal remains outstanding; it is not an assumed balloon.
+  # mode. Only loans not identified as balloons can retain principal at maturity.
   terminal <- loan_cash_flows[!duplicated(loan_cash_flows$LOAN_ID, fromLast = TRUE), ]
   residuals <- terminal[terminal$remaining_balance >= max(0.01, cfg$de_minimis_balance), ]
   if (nrow(residuals) > 0L) {
@@ -360,8 +457,16 @@ calculate_cash_flows <- function(data, config = list()) {
       "). Loan IDs: ", paste(utils::head(residuals$LOAN_ID, 5), collapse = ", "),
       if (nrow(residuals) > 5L) ", ..." else "",
       ". Projected principal collections are incomplete; verify payments and terms. ",
-      "No balloon payoff has been added.", call. = FALSE
+      "No balloon payoff has been added: identify balloon loans with ",
+      "col_amort_months_remaining, col_balloon, or balloon_at_maturity.", call. = FALSE
     )
+  }
+  balloons <- loan_cash_flows$balloon_principal > 0
+  if (cfg$show_progress && any(balloons)) {
+    message(length(unique(loan_cash_flows$LOAN_ID[balloons])),
+            " loan(s) pay a balloon at maturity (total ",
+            format(round(sum(loan_cash_flows$balloon_principal), 2), big.mark = ",",
+                   nsmall = 2), ").")
   }
 
   loan_cash_flows <- attach_cash_flow_groups(loan_cash_flows, data, cfg)
@@ -387,6 +492,7 @@ calculate_cash_flows <- function(data, config = list()) {
         reporting_fee_amt = sum(reporting_fee_amt, na.rm = TRUE),
         total_fees = sum(total_fees, na.rm = TRUE),
         scheduled_principal = sum(scheduled_principal, na.rm = TRUE),
+        balloon_principal = sum(balloon_principal, na.rm = TRUE),
         prepayment = sum(prepayment, na.rm = TRUE),
         total_principal = sum(total_principal, na.rm = TRUE),
         credit_loss = sum(credit_loss, na.rm = TRUE),
@@ -421,7 +527,9 @@ generate_single_loan_cash_flow <- function(loan_id,
                                            monthly_payment_val,
                                            origbalance,
                                            cfg,
-                                           default_tier) {
+                                           default_tier,
+                                           amort_months = NA_real_,
+                                           balloon = FALSE) {
 
   # Input validation - return empty if invalid
   if (is.na(principal) || is.na(rate) || is.na(term) || is.na(start_date) ||
@@ -445,6 +553,11 @@ generate_single_loan_cash_flow <- function(loan_id,
     tier <- default_tier
   }
 
+  # Payments amortize over the remaining amortization term, which exceeds the
+  # remaining maturity for a balloon loan; NA means fully amortizing.
+  amort_term <- if (is.na(amort_months)) term else as.integer(amort_months)
+  balloon    <- isTRUE(balloon) || amort_term > term
+
   # Monthly rates and factors
   monthly_rate        <- rate / 12
   monthly_servicing   <- cfg$servicing_fee / 12
@@ -458,9 +571,9 @@ generate_single_loan_cash_flow <- function(loan_id,
   if (use_monthly_payment) {
     base_payment <- monthly_payment_val
   } else if (monthly_rate == 0) {
-    base_payment <- principal / term
+    base_payment <- principal / amort_term
   } else {
-    base_payment <- principal * monthly_rate / (1 - (1 + monthly_rate)^(-term))
+    base_payment <- principal * monthly_rate / (1 - (1 + monthly_rate)^(-amort_term))
   }
 
   # Pre-computed payment dates: first payment one month AFTER the as-of date
@@ -477,6 +590,7 @@ generate_single_loan_cash_flow <- function(loan_id,
   reporting_fee_v       <- numeric(term)
   total_fees_v          <- numeric(term)
   scheduled_principal_v <- numeric(term)
+  balloon_principal_v   <- numeric(term)
   prepayment_v          <- numeric(term)
   total_principal_v     <- numeric(term)
   credit_loss_v         <- numeric(term)
@@ -494,11 +608,16 @@ generate_single_loan_cash_flow <- function(loan_id,
     # Cap credit loss at 100% of starting balance
     cl <- min(sb * monthly_credit_cost, sb)
 
+    # A balloon loan repays its whole balance at maturity, so no prepayment is
+    # projected in that month: the payoff is scheduled (balloon) principal.
+    balloon_month <- balloon && i == term
+    smm_i <- if (balloon_month) 0 else monthly_smm
+
     if (isTRUE(cfg$reamortize_survivors)) {
 
       # ---- Market convention: prepays are full payoffs; survivors keep
       # ---- their own schedules, so the pool payment re-amortizes monthly.
-      n_rem <- term - i + 1L
+      n_rem <- amort_term - i + 1L
       pmt_i <- if (use_monthly_payment) {
         base_payment * survival
       } else if (monthly_rate == 0) {
@@ -518,20 +637,20 @@ generate_single_loan_cash_flow <- function(loan_id,
       # Scheduled amortization first, SMM on the post-scheduled balance
       sp <- max(0, pmt_i - gi)
       sp <- min(sp, max(0, sb - cl))
-      pp <- max(0, sb - cl - sp) * monthly_smm
+      pp <- max(0, sb - cl - sp) * smm_i
 
       ab <- max(0, sb - pp - cl)      # column meaning unchanged vs legacy
       tp <- sp + pp
       rb <- max(0, sb - tp - cl)
 
-      survival <- survival * (1 - monthly_smm) *
+      survival <- survival * (1 - smm_i) *
         (1 - (if (sb > 0) cl / sb else 0))
 
     } else {
 
       # ---- Fixed-payment (curtailment) convention ----
       max_prepay <- max(0, sb - cl)
-      pp <- min(sb * monthly_smm, max_prepay)
+      pp <- min(sb * smm_i, max_prepay)
 
       ab <- max(0, sb - pp - cl)
 
@@ -570,6 +689,17 @@ generate_single_loan_cash_flow <- function(loan_id,
       rb <- 0
     }
 
+    # The balloon is scheduled principal, so total_principal still equals
+    # scheduled_principal + prepayment. Cleanup above keeps roundoff on a fully
+    # amortized loan from being reported as a balloon.
+    bp <- 0
+    if (balloon_month && rb > 0) {
+      bp <- rb
+      sp <- sp + rb
+      tp <- tp + rb
+      rb <- 0
+    }
+
     starting_balance_v[i]    <- sb
     adjusted_balance_v[i]    <- ab
     accrual_balance_v[i]     <- acc
@@ -579,6 +709,7 @@ generate_single_loan_cash_flow <- function(loan_id,
     reporting_fee_v[i]       <- rf
     total_fees_v[i]          <- tf
     scheduled_principal_v[i] <- sp
+    balloon_principal_v[i]   <- bp
     prepayment_v[i]          <- pp
     total_principal_v[i]     <- tp
     credit_loss_v[i]         <- cl
@@ -622,7 +753,7 @@ generate_single_loan_cash_flow <- function(loan_id,
   investor_interest  <- net_interest * cfg$investor_share
   investor_total     <- investor_principal + investor_interest
 
-  # Single tibble construction (column order matches v0.2.3 output exactly)
+  # Single tibble construction (v0.2.3 column order, plus balloon_principal)
   tibble::tibble(
     LOAN_ID             = loan_id,
     eff_date            = start_date,
@@ -639,6 +770,7 @@ generate_single_loan_cash_flow <- function(loan_id,
     reporting_fee_amt   = reporting_fee_v[idx],
     total_fees          = tf,
     scheduled_principal = scheduled_principal_v[idx],
+    balloon_principal   = balloon_principal_v[idx],
     prepayment          = prepayment_v[idx],
     total_principal     = tp,
     credit_loss         = cl,

@@ -5,50 +5,58 @@
 #' Supports flexible column naming, loan-level or global interest rate calculation methods
 #' for different financial institution systems.
 #'
-#' @param df Data frame containing loan-level monthly snapshot data.
+#' @param df Required. Data frame containing loan-level monthly snapshot data.
 #'   Each row represents a loan's status for a given reporting period.
 #'   Data should include only active loans (open and non-performing).
 #'   **Important:** Each loan should appear exactly once per reporting period.
 #'
-#' @param group_vars Character vector specifying columns to group by when calculating
+#' @param group_vars Required. Character vector specifying columns to group by when calculating
 #'   aggregate prepayment rates (e.g., \code{c("EFFDATE", "TYPECODE")}).
 #'   These typically represent reporting period and loan product type.
 #'   **Note:** The effective date column must be included in group_vars.
 #'
-#' @param prepay_config List containing column name mappings and calculation parameters:
+#' @param prepay_config Optional list of column name mappings and calculation
+#'   parameters. Every entry has a default; supply only the entries to change.
+#'   The seven columns marked \strong{required} must exist in \code{df} (under
+#'   the default or mapped name); entries marked \strong{optional} may be omitted.
 #'   \describe{
-#'     \item{\code{col_effdate}}{Name of reporting/effective date column (default: "EFFDATE")}
-#'     \item{\code{col_origdate}}{Name of origination date column (default: "ORIGDATE")}
-#'     \item{\code{col_typecode}}{Name of loan type/product column (default: "TYPECODE")}
-#'     \item{\code{col_balance}}{Name of current loan balance column (default: "BAL")}
-#'     \item{\code{col_orig_balance}}{Name of original/funded balance column (default: "ORIGBAL").
+#'     \item{\code{col_effdate}}{\strong{Required} column. Reporting/effective date (default: "EFFDATE")}
+#'     \item{\code{col_origdate}}{\strong{Required} column. Origination date (default: "ORIGDATE")}
+#'     \item{\code{col_typecode}}{\strong{Required} column. Loan type/product (default: "TYPECODE")}
+#'     \item{\code{col_balance}}{\strong{Required} column. Current loan balance (default: "BAL")}
+#'     \item{\code{col_orig_balance}}{\strong{Required} column. Original/funded balance (default: "ORIGBAL").
 #'       Validated but not used for funding, which is measured at the reported balance.}
-#'     \item{\code{col_payment}}{Name of contractual payment amount column (default: "PAYAMT")}
-#'     \item{\code{col_rate}}{Name of current interest rate column (default: "CURRINTRATE").
+#'     \item{\code{col_payment}}{\strong{Required} column. Contractual payment amount (default: "PAYAMT")}
+#'     \item{\code{col_rate}}{\strong{Required} column. Current interest rate (default: "CURRINTRATE").
 #'       Rates should be in decimal form (e.g., 0.0729 for 7.29\%). The function will
 #'       detect and convert percentage format with a warning.}
-#'     \item{\code{col_interest_basis}}{Name of loan-level interest basis column (optional, default: NULL).
+#'     \item{\code{col_interest_basis}}{\strong{Optional} column. Loan-level interest basis (default: NULL).
 #'       If provided, uses loan-level interest calculation basis. If NULL, uses global \code{interest_basis} parameter.}
-#'     \item{\code{col_loanid}}{Name of unique loan identifier column (optional but recommended, default: NULL).
+#'     \item{\code{col_loanid}}{\strong{Optional} (recommended) column. Unique loan identifier (default: NULL).
 #'       If provided: (1) validates that each loan appears only once per reporting period,
 #'       and (2) enables more accurate scheduled principal calculation using beginning-of-period balances.
 #'       Recommended for data quality assurance and calculation accuracy (e.g., "LOANNUMBER", "LOAN_ID").}
-#'     \item{\code{interest_basis}}{Number of days in year for interest calculation (global fallback).
+#'     \item{\code{col_maturity_date}}{\strong{Optional} column. Contractual maturity date
+#'       (default: NULL). Requires \code{col_loanid}. A payoff exit observed in or after the
+#'       loan's maturity month has its whole prior balance counted as scheduled principal
+#'       (e.g. a balloon), not prepayment (\code{MATURITY_EXIT_BAL}). NA dates keep the usual
+#'       payoff treatment.}
+#'     \item{\code{interest_basis}}{\strong{Optional.} Number of days in year for interest calculation (global fallback).
 #'       Use 360 or 365 for daily interest method, or NULL/NA for simple monthly division.
 #'       Ignored if \code{col_interest_basis} is specified (default: 365)}
-#'     \item{\code{allow_negative_prepay}}{Logical indicating whether to allow negative
+#'     \item{\code{allow_negative_prepay}}{\strong{Optional.} Logical indicating whether to allow negative
 #'       SMM/CPR values. If FALSE, negative values are floored at 0 (default: FALSE)}
-#'     \item{\code{min_begin_balance}}{Numeric threshold for minimum beginning balance.
+#'     \item{\code{min_begin_balance}}{\strong{Optional.} Numeric threshold for minimum beginning balance.
 #'       Diagnostic-free cohorts below this value are excluded; flagged rows are retained (default: 0)}
-#'     \item{\code{exit_treatment}}{How loans that leave the portfolio are treated when
+#'     \item{\code{exit_treatment}}{\strong{Optional.} How loans that leave the portfolio are treated when
 #'       \code{col_loanid} is supplied. \code{"payoff"} (default) counts them as voluntary
 #'       runoff, the usual treatment for snapshots of active loans. \code{"unresolved"}
 #'       withholds the estimate for any period with an exit, as in v0.2.6.}
-#'     \item{\code{non_prepay_exit_ids}}{Optional vector of loan IDs whose exits are not
+#'     \item{\code{non_prepay_exit_ids}}{\strong{Optional.} Vector of loan IDs whose exits are not
 #'       prepayments (e.g., charge-offs, sales, transfers out of the data). Their prior
 #'       balance is removed from both runoff and the pool available to prepay.
 #'       Requires \code{col_loanid} (default: NULL)}
-#'     \item{\code{entry_treatment}}{How loans reported for the first time are treated when
+#'     \item{\code{entry_treatment}}{\strong{Optional.} How loans reported for the first time are treated when
 #'       \code{col_loanid} is supplied. \code{"funding"} (default) counts every loan never
 #'       seen in an earlier snapshot as new balance, at its first reported balance, whatever
 #'       its origination date. \code{"unresolved"} withholds the estimate when a new loan
@@ -59,7 +67,7 @@
 #'   the default name is also present (e.g. \code{col_origdate = "FUND_DATE"} beside an
 #'   \code{ORIGDATE} column); the unmapped column is ignored.
 #'
-#' @param verbose Logical indicating whether to print informational messages
+#' @param verbose Optional. Logical indicating whether to print informational messages
 #'   about interest calculation methods and data filtering (default: FALSE)
 #'
 #' @return Data frame with columns:
@@ -86,7 +94,10 @@
 #'       exit when \code{exit_treatment = "unresolved"}); NA without loan IDs}
 #'     \item{\code{PAYOFF_EXITS}}{Count of loans that left the portfolio and are counted as payoffs; NA without loan IDs}
 #'     \item{\code{EXIT_SCHED_PRIN}}{Final-month scheduled principal of payoff exits, capped at each
-#'       loan's prior balance; included in SCHED_PRIN_TOTAL. 0 without loan IDs}
+#'       loan's prior balance (the whole prior balance for maturity exits); included in
+#'       SCHED_PRIN_TOTAL. 0 without loan IDs}
+#'     \item{\code{MATURITY_EXIT_BAL}}{Prior balance of payoff exits at or after their maturity
+#'       date; included in EXIT_SCHED_PRIN. 0 without \code{col_maturity_date}}
 #'     \item{\code{EXCLUDED_EXIT_BAL}}{Prior balance of exits listed in \code{non_prepay_exit_ids}}
 #'     \item{\code{UNRESOLVED_ENTRIES}}{Count of cohort entrants that are not new loans: transfers
 #'       in and loans returning after a gap (plus, with \code{entry_treatment = "unresolved"}, new
@@ -114,7 +125,9 @@
 #' \code{non_prepay_exit_ids} to remove their balance from runoff and from the pool.
 #' A payoff's final-month scheduled payment (payment less interest on its prior
 #' balance, capped at that balance) is scheduled principal, so a loan reaching
-#' maturity is not a prepayment. A cohort whose loans all left this way ends at
+#' maturity is not a prepayment. That cap cannot recognize a balloon: supply
+#' \code{col_maturity_date} so a payoff in or after its maturity month is
+#' scheduled in full. A cohort whose loans all left this way ends at
 #' a zero balance. A loan never reported before is new funding at its first
 #' reported balance, so amortization before it was first reported, or an ORIGBAL
 #' recorded as a commitment, is not counted as prepayment. Cohort transfers and
@@ -272,6 +285,7 @@ calculate_prepay_speed <- function(
       col_rate = "CURRINTRATE",
       col_interest_basis = NULL,
       col_loanid = NULL,
+      col_maturity_date = NULL,
       interest_basis = 365,
       allow_negative_prepay = FALSE,
       min_begin_balance = 0,
@@ -311,6 +325,7 @@ calculate_prepay_speed <- function(
     col_rate = "CURRINTRATE",
     col_interest_basis = NULL,
     col_loanid = NULL,
+    col_maturity_date = NULL,
     interest_basis = 365,
     allow_negative_prepay = FALSE,
     min_begin_balance = 0,
@@ -332,6 +347,7 @@ calculate_prepay_speed <- function(
   col_rate <- prepay_config$col_rate
   col_interest_basis <- prepay_config$col_interest_basis
   col_loanid <- prepay_config$col_loanid
+  col_maturity_date <- prepay_config$col_maturity_date
   interest_basis <- prepay_config$interest_basis
   allow_negative_prepay <- prepay_config$allow_negative_prepay
   min_begin_balance <- prepay_config$min_begin_balance
@@ -378,6 +394,19 @@ calculate_prepay_speed <- function(
     use_loan_id <- TRUE
   }
 
+  # Validate optional col_maturity_date if provided
+  use_maturity <- FALSE
+  if (!is.null(col_maturity_date)) {
+    if (!is.character(col_maturity_date) || length(col_maturity_date) != 1L ||
+        is.na(col_maturity_date) || !col_maturity_date %in% names(df)) {
+      stop("col_maturity_date must name a column in the data (or be NULL).")
+    }
+    if (!use_loan_id) {
+      stop("'col_maturity_date' requires 'col_loanid' so exits can be matched to loans")
+    }
+    use_maturity <- TRUE
+  }
+
   # Validate global interest_basis (only relevant if not using loan-level)
   if (!use_loan_level_basis) {
     if (!is.null(interest_basis) && !is.na(interest_basis)) {
@@ -410,8 +439,8 @@ calculate_prepay_speed <- function(
   reserved_output <- c("BEGIN_BAL", "END_BAL", "SCHED_PRIN_TOTAL", "FUNDED_BAL",
     "ACTUAL_PRIN", "PREPAYMENT", "SMM", "CPR", "AVAILABLE_TO_PREPAY", "SMM_RAW",
     "SMM_ADJUSTED", "COHORT_DISAPPEARED", "UNRESOLVED_EXITS", "PAYOFF_EXITS",
-    "EXIT_SCHED_PRIN", "EXCLUDED_EXIT_BAL", "UNRESOLVED_ENTRIES", "LATE_FUNDED_ENTRIES",
-    "DIAGNOSTIC")
+    "EXIT_SCHED_PRIN", "MATURITY_EXIT_BAL", "EXCLUDED_EXIT_BAL", "UNRESOLVED_ENTRIES",
+    "LATE_FUNDED_ENTRIES", "DIAGNOSTIC")
   if (any(group_vars %in% reserved_output)) {
     stop("Grouping columns conflict with reserved prepayment output names; rename them first.")
   }
@@ -480,6 +509,10 @@ calculate_prepay_speed <- function(
     rename_list$LOANID <- col_loanid
   }
 
+  if (use_maturity) {
+    rename_list$MATDATE <- col_maturity_date
+  }
+
   # An unmapped column may already carry an internal name, e.g. ORIGDATE when
   # col_origdate = "FUND_DATE". Drop it so the mapped column can take that name.
   shadowed <- setdiff(intersect(names(rename_list), names(df)), unlist(rename_list))
@@ -512,6 +545,9 @@ calculate_prepay_speed <- function(
   if (use_loan_id) {
     column_mapping <- c(column_mapping, setNames("LOANID", col_loanid))
   }
+  if (use_maturity) {
+    column_mapping <- c(column_mapping, setNames("MATDATE", col_maturity_date))
+  }
 
   group_vars <- sapply(group_vars, function(gv) {
     if (gv %in% names(column_mapping)) {
@@ -534,6 +570,17 @@ calculate_prepay_speed <- function(
 
   if (any(!is.finite(as.numeric(df$ORIGDATE)))) {
     stop("Unable to convert 'col_origdate' to Date format. Check date values.")
+  }
+
+  if (use_maturity) {
+    # NA maturity dates are allowed: those exits keep the usual payoff treatment.
+    raw_maturity <- df$MATDATE
+    df$MATDATE <- tryCatch(as.Date(raw_maturity), error = function(e) {
+      stop("Unable to convert 'col_maturity_date' to Date format. Check date values.")
+    })
+    if (any(!is.na(raw_maturity) & !is.finite(as.numeric(df$MATDATE)))) {
+      stop("Unable to convert 'col_maturity_date' to Date format. Check date values.")
+    }
   }
 
   reporting_dates <- validate_prepay_periods(df$EFFDATE)
@@ -756,7 +803,7 @@ calculate_prepay_speed <- function(
 
   balance_snapshot <- prepay_snapshot_pairs(df, group_vars, reporting_dates, use_loan_id,
                                             exit_treatment, non_prepay_exit_ids,
-                                            entry_treatment)
+                                            entry_treatment, use_maturity)
 
   # ========================================================================
   # STEP 3: FINAL PREPAYMENT CALCULATION
@@ -814,6 +861,7 @@ calculate_prepay_speed <- function(
       UNRESOLVED_EXITS,
       PAYOFF_EXITS,
       EXIT_SCHED_PRIN,
+      MATURITY_EXIT_BAL,
       EXCLUDED_EXIT_BAL,
       UNRESOLVED_ENTRIES,
       LATE_FUNDED_ENTRIES,

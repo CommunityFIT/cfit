@@ -16,6 +16,23 @@ devtools::install_github("CommunityFIT/cfit")
 library(cfit)
 ```
 
+## Upgrading to v0.2.9
+
+v0.2.9 adds balloon loans (e.g. commercial real estate). Projections for
+non-balloon loans are unchanged.
+
+- `calculate_cash_flows()` output has a new `balloon_principal` column. It is
+  zero for fully amortizing loans and is part of `scheduled_principal`, so
+  `total_principal = scheduled_principal + prepayment` still holds. Code that
+  selects output columns by position should be checked.
+- Identify balloon loans with `col_amort_months_remaining` (remaining
+  amortization months), `col_balloon` (a per-loan flag), or
+  `balloon_at_maturity` (every unflagged loan). Without them, results match v0.2.8.
+- `calculate_prepay_speed()` accepts `col_maturity_date` (with `col_loanid`).
+  A payoff in or after its maturity month is then scheduled principal, not
+  prepayment, so historical CPR for balloon portfolios may fall. Output gains
+  `MATURITY_EXIT_BAL`.
+
 ## Upgrading to v0.2.8
 
 v0.2.8 stops scheduled repayments from being counted as prepayments, so
@@ -48,7 +65,7 @@ Key changes in v0.2.6 from 0.2.5.1:
   prepayment estimates return `NA`.
 
 Review input requirements below and [NEWS.md](NEWS.md) for migration details.
-Payment-date conventions are unchanged; balloon schedules remain future work.
+Payment-date conventions are unchanged.
 
 ## Functions
 
@@ -144,6 +161,20 @@ calculate_prepay_speed(
 # EXCLUDED_EXIT_BAL = 22000, SMM = 0.0231, CPR = 0.244
 ```
 
+A balloon loan's final payment is far larger than its regular payment, so its
+payoff at maturity would otherwise count as a prepayment. Supply
+`col_maturity_date` (requires `col_loanid`): a payoff in or after the loan's
+maturity month is then scheduled principal in full (`MATURITY_EXIT_BAL`).
+Loans with an `NA` maturity date keep the usual treatment.
+
+```r
+calculate_prepay_speed(
+  cre_snapshots,
+  group_vars = c("EFFDATE", "TYPECODE"),
+  prepay_config = list(col_loanid = "LOANNUMBER", col_maturity_date = "MATDATE")
+)
+```
+
 Set `exit_treatment = "unresolved"` to treat every unlisted exit as unknown, as
 v0.2.6 did: February AUTO then has `UNRESOLVED_EXITS = 1` and `CPR = NA`, with a
 summary warning.
@@ -189,8 +220,38 @@ Supply one row per loan with a positive finite balance, non-negative finite deci
 positive integer remaining term, and valid effective date. IDs must be unique
 and non-missing; they are generated if the implicit `LOAN_ID` column is absent
 or `col_loanid = NULL`. Invalid configuration keys or missing mapped columns error.
-Optional payment and original-balance values may be `NA` to use per-loan fallbacks;
-otherwise they must be positive and finite.
+Optional payment, original-balance, and amortization-term values may be `NA` to
+use per-loan fallbacks; otherwise they must be positive and finite.
+
+#### Required and Optional Inputs
+
+`data` is required; `config` is optional, and every entry in it has a default.
+Four data columns are required. Map them with the `col_*` entry if your tape
+uses different names:
+
+| Required column | `config` entry | Default name |
+| --- | --- | --- |
+| Current balance | `col_balance` | `balance` |
+| Note rate (decimal) | `col_rate` | `current_interest_rate` |
+| Remaining months to maturity | `col_term` | `months_to_maturity` |
+| Snapshot date (t = 0) | `col_start_date` | `eff_date` |
+
+Optional columns are used only when mapped (`col_loanid` also uses a `LOAN_ID`
+column when present):
+
+| Optional column | `config` entry | When `NA` or not mapped |
+| --- | --- | --- |
+| Loan ID | `col_loanid` | Sequential IDs |
+| Tier | `col_tier` | Named `default` tier |
+| Monthly payment | `col_monthly_payment` | Calculated payment |
+| Original balance | `col_orig_balance` | Current balance |
+| Remaining amortization months | `col_amort_months_remaining` | Fully amortizing over the remaining term |
+| Balloon flag (logical or 0/1) | `col_balloon` | `balloon_at_maturity` |
+
+All other settings (fees, prepayment and credit assumptions, conventions,
+output options) are optional with documented defaults. The linear-incentive
+parameters are required only with `prepay_model = "linear_incentive"`. See
+`?calculate_cash_flows` for the full list.
 
 #### Modeling Conventions
 
@@ -208,10 +269,47 @@ otherwise they must be positive and finite.
   Small-balance cleanup is included in scheduled principal; `scheduled_payment`
   is the payment before final payoff adjustments.
 
-Payments below accrued interest error. Interest-only payments are accepted, but
-residual balances at maturity of at least `max(0.01, de_minimis_balance)` warn.
-No balloon is added; analytics reflect only projected collections. Balloon and
-negative-amortization schedules are not supported.
+Payments below accrued interest error. Interest-only payments are accepted.
+For loans not identified as balloons, residual balances at maturity of at least
+`max(0.01, de_minimis_balance)` warn; no balloon is added, and analytics reflect
+only projected collections. Negative-amortization schedules are not supported.
+
+#### Balloon Loans
+
+A loan pays a balloon at maturity when its remaining amortization term is longer
+than its remaining maturity, or when it is flagged:
+
+- `col_amort_months_remaining`: remaining amortization months as of the
+  snapshot, **not** the original amortization term. Payments are calculated over
+  this term. For a seasoned loan, subtract the payments already made (usually
+  original term minus months to maturity). Values below `col_term` error.
+- `col_balloon`: a per-loan flag (logical or 0/1) for tapes with payments but no
+  amortization term; any balance left at maturity is collected as a balloon.
+- `balloon_at_maturity = TRUE`: the same, for every loan without a flag. Use it
+  only for pools that are entirely balloon loans; on amortizing pools it would
+  hide payment or term errors.
+
+In the maturity month, the remaining balance is collected as `balloon_principal`
+(part of `scheduled_principal`) and no prepayment is projected. The balloon is
+assumed paid in full; refinance or extension risk is not modeled.
+
+```r
+mixed_portfolio <- data.frame(
+  LOAN_ID = c("CRE1", "AUTO1"),
+  balance = c(1500000, 25000),
+  current_interest_rate = c(0.0675, 0.0599),
+  months_to_maturity = c(24, 60),
+  amort_months_remaining = c(264, NA),  # 25-year schedule, 3 years seasoned; NA: amortizing
+  eff_date = as.Date("2025-01-01")
+)
+
+mixed_flows <- calculate_cash_flows(mixed_portfolio, list(
+  col_amort_months_remaining = "amort_months_remaining",
+  cpr_vec = c("default" = 0.05)
+))
+# Message: 1 loan(s) pay a balloon at maturity (total ...)
+subset(mixed_flows, balloon_principal > 0)[c("LOAN_ID", "month", "balloon_principal")]
+```
 
 #### Basic Projection
 
@@ -407,9 +505,10 @@ See `?calculate_duration` and `?calculate_wal` for options.
 
 ## Roadmap
 
-Planned improvements after v0.2.8 include:
+Planned improvements after v0.2.9 include:
 
-- Balloon and interest-only loan schedules, including commercial loans
+- Partial interest-only periods (interest-only, then amortizing)
+- Refinance and extension risk at balloon maturity
 - A configurable month-end payment-date convention
 - Effective duration with rate-responsive cash flows under parallel rate shocks
 

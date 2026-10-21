@@ -9,8 +9,13 @@ test_that("calculate_cash_flows reproduces v0.2.5 golden masters", {
     golden  <- readRDS(golden_file)
     current <- suppressWarnings(do.call(calculate_cash_flows, cases[[nm]]))
 
+    # Non-balloon fixtures: balloon_principal (added in v0.2.9) must be all zero,
+    # and every other column must match the historical masters.
     strip_metadata <- function(x) {
-      drop <- function(d) d[, setdiff(names(d), "original_tier")]
+      drop <- function(d) {
+        expect_true(all(d$balloon_principal == 0), info = paste("golden case:", nm))
+        d[, setdiff(names(d), c("original_tier", "balloon_principal"))]
+      }
       if (is.data.frame(x)) drop(x) else lapply(x, drop)
     }
     expect_equal(strip_metadata(current), golden, tolerance = 1e-8,

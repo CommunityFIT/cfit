@@ -41,7 +41,8 @@ validate_cash_flow_vector <- function(x, label, lower = 0, upper = 1) {
 
 validate_cash_flow_config <- function(cfg) {
   required_maps <- c("col_balance", "col_rate", "col_term", "col_start_date")
-  optional_maps <- c("col_loanid", "col_tier", "col_monthly_payment", "col_orig_balance")
+  optional_maps <- c("col_loanid", "col_tier", "col_monthly_payment", "col_orig_balance",
+                     "col_amort_months_remaining", "col_balloon")
   for (nm in c(required_maps, optional_maps)) {
     x <- cfg[[nm]]
     if (is.null(x) && nm %in% optional_maps) next
@@ -51,7 +52,8 @@ validate_cash_flow_config <- function(cfg) {
     }
   }
   for (nm in c("interest_on_starting_balance", "credit_loss_reduces_interest",
-               "reamortize_survivors", "return_monthly_totals", "show_progress")) {
+               "reamortize_survivors", "balloon_at_maturity", "return_monthly_totals",
+               "show_progress")) {
     x <- cfg[[nm]]
     if (!is.logical(x) || length(x) != 1L || is.na(x)) {
       stop(nm, " must be TRUE or FALSE.")
@@ -141,11 +143,12 @@ validate_cash_flow_data <- function(data, cfg) {
          "'. Supply one row per loan; duplicates include: ",
          paste(utils::head(unique(ids[duplicated(ids)]), 5), collapse = ", "))
   }
-  for (nm in c("col_balance", "col_rate", "col_term", "col_monthly_payment", "col_orig_balance")) {
+  optional_numeric <- c("col_monthly_payment", "col_orig_balance", "col_amort_months_remaining")
+  for (nm in c("col_balance", "col_rate", "col_term", optional_numeric)) {
     col <- cfg[[nm]]
     if (is.null(col)) next
     x <- data[[col]]
-    optional <- nm %in% c("col_monthly_payment", "col_orig_balance")
+    optional <- nm %in% optional_numeric
     if (!is.numeric(x) || !is.null(dim(x))) {
       stop("Column '", col, "' must be numeric.")
     }
@@ -161,12 +164,31 @@ validate_cash_flow_data <- function(data, cfg) {
     } else {
       bad <- !is.na(x) & x <= 0
     }
-    if (nm == "col_term") bad <- bad | x != floor(x) | x > .Machine$integer.max
+    is_term <- nm %in% c("col_term", "col_amort_months_remaining")
+    if (is_term) bad <- bad | (!is.na(x) & (x != floor(x) | x > .Machine$integer.max))
     if (any(bad)) {
       stop("Column '", col, "' must contain ",
            if (nm == "col_rate") "non-negative rates" else
-             if (nm == "col_term") "positive integer terms" else "positive values",
+             if (is_term) "positive integer terms" else "positive values",
            "; invalid row(s): ", paste(utils::head(which(bad), 5), collapse = ", "))
+    }
+  }
+  if (!is.null(cfg$col_amort_months_remaining)) {
+    amort <- data[[cfg$col_amort_months_remaining]]
+    bad <- !is.na(amort) & amort < data[[cfg$col_term]]
+    if (any(bad)) {
+      stop("Column '", cfg$col_amort_months_remaining, "' must be NA or at least the ",
+           "remaining maturity in '", cfg$col_term, "' (remaining, not original, ",
+           "amortization months); invalid row(s): ",
+           paste(utils::head(which(bad), 5), collapse = ", "))
+    }
+  }
+  if (!is.null(cfg$col_balloon)) {
+    flag <- data[[cfg$col_balloon]]
+    if (!(is.logical(flag) || is.numeric(flag)) || !is.null(dim(flag)) ||
+        any(is.nan(flag)) || any(!is.na(flag) & !flag %in% c(0, 1))) {
+      stop("Column '", cfg$col_balloon, "' must be logical (TRUE/FALSE) or 0/1, ",
+           "with NA for loans that use balloon_at_maturity.")
     }
   }
   col <- cfg$col_start_date

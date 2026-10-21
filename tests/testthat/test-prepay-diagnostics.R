@@ -320,3 +320,59 @@ test_that("remapped columns may coexist with columns carrying the default names"
   expect_equal(out, prepay_estimate(prepay_history()))
   expect_error(calculate_prepay_speed(x, c("EFFDATE", "ORIGDATE"), cfg), "share an internal name")
 })
+
+test_that("a payoff at or after its maturity date is scheduled principal, not prepayment", {
+  d <- as.Date(c("2024-01-31", "2024-02-29"))
+  # B is a balloon loan: 300,000 outstanding, 1,000 payment, due in February.
+  x <- data.frame(ID = c("A", "B", "A"), EFFDATE = d[c(1, 1, 2)],
+    ORIGDATE = as.Date("2019-02-15"), TYPECODE = "CRE", ORIGBAL = 4e5, CURRINTRATE = 0,
+    BAL = c(10000, 3e5, 9700), PAYAMT = c(300, 1000, 300),
+    MATURITY = as.Date(c("2027-01-15", "2024-02-15", "2027-01-15")))
+  speed <- function(...) calculate_prepay_speed(x, "EFFDATE",
+    utils::modifyList(list(col_loanid = "ID", interest_basis = NA), list(...)))
+  # v0.2.8 behavior without maturity dates: the balloon is a prepayment.
+  out <- speed()
+  expect_equal(out$PREPAYMENT, 3e5 - 1000)
+  expect_equal(out$MATURITY_EXIT_BAL, 0)
+  out <- speed(col_maturity_date = "MATURITY")
+  expect_equal(out$PAYOFF_EXITS, 1L)
+  expect_equal(out$MATURITY_EXIT_BAL, 3e5)
+  expect_equal(out$EXIT_SCHED_PRIN, 3e5)
+  expect_equal(out$SCHED_PRIN_TOTAL, 300 + 3e5)
+  expect_equal(out$PREPAYMENT, 0)
+  expect_equal(out$CPR, 0)
+  expect_equal(out$DIAGNOSTIC, "ok")
+  # A loan paid off after it was already past maturity is still scheduled.
+  x$MATURITY[2] <- as.Date("2023-12-01")
+  expect_equal(speed(col_maturity_date = "MATURITY")$PREPAYMENT, 0)
+  # Paid off before its maturity month: a prepayment as usual.
+  x$MATURITY[2] <- as.Date("2024-03-01")
+  out <- speed(col_maturity_date = "MATURITY")
+  expect_equal(out$MATURITY_EXIT_BAL, 0)
+  expect_equal(out$PREPAYMENT, 3e5 - 1000)
+  # Unknown maturity keeps the usual payoff treatment.
+  x$MATURITY[2] <- NA
+  expect_equal(speed(col_maturity_date = "MATURITY")$PREPAYMENT, 3e5 - 1000)
+  # Listed non-prepayment exits stay excluded, matured or not.
+  x$MATURITY[2] <- as.Date("2024-02-15")
+  out <- speed(col_maturity_date = "MATURITY", non_prepay_exit_ids = "B")
+  expect_equal(out$MATURITY_EXIT_BAL, 0)
+  expect_equal(out$EXCLUDED_EXIT_BAL, 3e5)
+  # Character dates and a remapped name are accepted.
+  x$MAT_CHR <- as.character(x$MATURITY)
+  expect_equal(speed(col_maturity_date = "MAT_CHR")$MATURITY_EXIT_BAL, 3e5)
+})
+
+test_that("maturity-date controls are validated", {
+  x <- prepay_history()
+  x$MATURITY <- as.Date("2030-01-01")
+  expect_error(prepay_estimate(x, ids = FALSE, col_maturity_date = "MATURITY"),
+               "requires 'col_loanid'")
+  expect_error(prepay_estimate(x, col_maturity_date = "NOPE"), "col_maturity_date must name")
+  x$MATURITY <- "not a date"
+  expect_error(prepay_estimate(x, col_maturity_date = "MATURITY"), "col_maturity_date")
+  x$MATURITY <- NULL
+  x$MATURITY_EXIT_BAL <- 1
+  expect_error(calculate_prepay_speed(x, c("EFFDATE", "MATURITY_EXIT_BAL"),
+    list(col_loanid = "ID", interest_basis = NA)), "reserved")
+})
