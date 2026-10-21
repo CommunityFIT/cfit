@@ -1,3 +1,47 @@
+# cfit 0.2.9
+
+## Balloon loans
+
+Projections for non-balloon loans are unchanged: with none of the new options
+set, every existing output column matches v0.2.8.
+
+* `calculate_cash_flows()` supports balloon loans (e.g. commercial real estate).
+  A loan pays a balloon at maturity when it is identified by any of:
+  * New optional column `col_amort_months_remaining`: remaining amortization
+    months as of the snapshot (not the original term). Payments are calculated
+    over it, and a value above `col_term` makes the loan a balloon loan. `NA`
+    means fully amortizing; values below `col_term` error.
+  * New optional column `col_balloon`: a per-loan flag (logical or 0/1) that
+    collects any balance remaining at maturity. `NA` uses `balloon_at_maturity`.
+  * New setting `balloon_at_maturity` (default `FALSE`): the same, for every
+    loan without a flag.
+  An explicit `col_balloon = FALSE` cannot override a longer amortization term;
+  such loans pay a balloon, with a warning.
+* New output column `balloon_principal`, also summed in monthly totals. It is
+  part of `scheduled_principal`, so `total_principal = scheduled_principal +
+  prepayment` still holds, and zero for fully amortizing loans. No prepayment is
+  projected in a balloon loan's maturity month. With `show_progress = TRUE`, a
+  message reports the number of balloon loans and the total balloon amount.
+* The maturity residual warning now applies only to loans not identified as
+  balloons, and names the options for identifying them.
+* `calculate_wal()` and `calculate_duration()` are unchanged; for balloon loans
+  they now include the balloon payment.
+
+## Historical prepayment: balloon payoffs at maturity
+
+* New `prepay_config$col_maturity_date` for `calculate_prepay_speed()`
+  (requires `col_loanid`). A payoff exit in or after its maturity month has its
+  whole prior balance counted as scheduled principal rather than prepayment.
+  Previously only the final regular payment was scheduled, so balloon
+  maturities inflated CPR. New output column `MATURITY_EXIT_BAL` (included in
+  `EXIT_SCHED_PRIN`). Without maturity dates, results are unchanged.
+
+## Documentation
+
+* `?calculate_cash_flows` and `?calculate_prepay_speed` now label every input as
+  required, optional, or conditionally required. The README adds tables of
+  required and optional cash-flow columns and a balloon loan example.
+
 # cfit 0.2.8
 
 ## Historical prepayment: scheduled repayments are no longer prepayments
