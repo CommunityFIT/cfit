@@ -281,8 +281,13 @@ than its remaining maturity, or when it is flagged:
 
 - `col_amort_months_remaining`: remaining amortization months as of the
   snapshot, **not** the original amortization term. Payments are calculated over
-  this term. For a seasoned loan, subtract the payments already made (usually
-  original term minus months to maturity). Values below `col_term` error.
+  this term. For a seasoned loan, subtract the monthly payments already made
+  from the original amortization term. For an unchanged monthly schedule:
+  remaining amortization months = original amortization months −
+  (original contractual term in months − remaining months to maturity).
+  For example, a 25-year amortization schedule with a five-year contractual
+  term, seasoned three years, has 300 − (60 − 24) = 264 amortization months
+  remaining. Values below `col_term` error.
 - `col_balloon`: a per-loan flag (logical or 0/1) for tapes with payments but no
   amortization term; any balance left at maturity is collected as a balloon.
 - `balloon_at_maturity = TRUE`: the same, for every loan without a flag. Use it

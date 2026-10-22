@@ -79,8 +79,12 @@ utils::globalVariables(c(
 #'     over this term; a value greater than col_term makes the loan a balloon
 #'     loan. Must be NA or a positive integer at least col_term; NA means
 #'     fully amortizing over col_term. To convert an original amortization
-#'     term, subtract the payments already made, usually
-#'     original term - months_to_maturity.
+#'     term, subtract the monthly payments already made. For an unchanged
+#'     monthly schedule: remaining amortization months = original amortization
+#'     months - (original contractual term in months - remaining months to
+#'     maturity). For example, a 25-year amortization schedule with a five-year
+#'     contractual term, seasoned three years, has 300 - (60 - 24) = 264
+#'     amortization months remaining.
 #'   \item col_balloon: Per-loan balloon flag, logical or 0/1. TRUE collects
 #'     any balance remaining at maturity as a balloon. NA uses
 #'     balloon_at_maturity. Use it when the tape has payments but no
@@ -258,8 +262,8 @@ utils::globalVariables(c(
 #'
 #' results <- calculate_cash_flows(loan_data, config_totals)
 #'
-#' # Balloon (e.g. CRE) loans: 5 years to maturity on a 25-year schedule,
-#' # 3 years seasoned, so 264 amortization months remain
+#' # Balloon (e.g. CRE) loans: 5-year contractual term on a 25-year schedule,
+#' # 3 years seasoned, so 24 maturity months and 264 amortization months remain
 #' cre_data <- data.frame(
 #'   LOAN_ID = c("CRE1", "AUTO1"),
 #'   balance = c(1500000, 25000),
